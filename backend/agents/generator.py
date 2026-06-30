@@ -85,7 +85,7 @@ async def generate_article(force_category: str = None):
     # ---------------------------------------------------------
     print("4. ITERATION 2: Calling Researcher Agent (Tavily)...")
     if category == 'novedades':
-        search_query = f"{editor_briefing.get('cleanTitle')} anime latest news update announcements site:animenewsnetwork.com OR site:crunchyroll.com/news OR site:reddit.com/r/anime"
+        search_query = f"{editor_briefing.get('cleanTitle')} anime latest news update announcements site:animenewsnetwork.com OR site:crunchyroll.com/news OR site:reddit.com/r/anime OR site:myanimelist.net/news OR site:comicbook.com/anime OR site:sportskeeda.com/anime"
     elif category == 'curiosidades':
         search_query = f"{editor_briefing.get('cleanTitle')} anime trivia easter eggs hidden facts"
     else:

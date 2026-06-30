@@ -12,7 +12,7 @@ async def fetch_tavily_research(query: str, category: str = "analisis") -> str:
         "query": query,
         "search_depth": "basic",
         "include_answer": False,
-        "max_results": 3
+        "max_results": 10 if category == "novedades" else 5
     }
 
     # Time-awareness para noticias

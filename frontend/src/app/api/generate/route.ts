@@ -1,7 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import dbConnect from '@/lib/mongodb';
-import Article from '@/models/Article';
-import { generateArticle } from '@/lib/agent/generator';
 
 export async function GET(request: NextRequest) {
   // Authentication check (Cron Job or Manual execution)
@@ -14,39 +11,28 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    await dbConnect();
+    // Proxy the request to the Python FastAPI backend
+    const pythonBackendUrl = 'http://127.0.0.1:8000/api/generate';
+    
+    // Pass along query parameters
+    const params = new URLSearchParams();
+    if (secretQuery) params.append('secret', secretQuery);
+    const category = request.nextUrl.searchParams.get('category');
+    if (category) params.append('category', category);
+    const force = request.nextUrl.searchParams.get('force');
+    if (force) params.append('force', force);
 
-    // Prevent duplicates: Check if an article was already created today
-    const startOfDay = new Date();
-    startOfDay.setHours(0, 0, 0, 0);
-    const force = request.nextUrl.searchParams.get('force') === 'true';
+    const response = await fetch(`${pythonBackendUrl}?${params.toString()}`);
+    
+    const data = await response.json();
 
-    if (!force) {
-      const existingArticle = await Article.findOne({
-        createdAt: { $gte: startOfDay },
-      });
-
-      if (existingArticle) {
-        return NextResponse.json(
-          { message: 'An article was already generated today. Use &force=true to override.', article: existingArticle },
-          { status: 200 }
-        );
-      }
+    if (!response.ok) {
+      return NextResponse.json(data, { status: response.status });
     }
 
-    // Generate the new article
-    const requestedCategory = request.nextUrl.searchParams.get('category');
-    const generatedData = await generateArticle(requestedCategory as any);
-
-    // Save to Database
-    const newArticle = await Article.create(generatedData);
-
-    return NextResponse.json(
-      { message: 'Article generated and saved successfully.', article: newArticle },
-      { status: 201 }
-    );
+    return NextResponse.json(data, { status: response.status });
   } catch (error: any) {
-    console.error('Error in /api/generate:', error);
-    return NextResponse.json({ error: error.message || 'Internal Server Error' }, { status: 500 });
+    console.error('Error in /api/generate proxy:', error);
+    return NextResponse.json({ error: 'Failed to communicate with Python backend' }, { status: 500 });
   }
 }
