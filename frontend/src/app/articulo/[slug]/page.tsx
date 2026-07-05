@@ -13,7 +13,11 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
     title: `${article.title.es} | KenkoAnime`,
     description: article.excerpt.es,
     openGraph: {
+      title: article.title.es,
+      description: article.excerpt.es,
       images: [article.imageUrl],
+      locale: 'es_ES',
+      alternateLocale: ['en_US'],
     }
   };
 }

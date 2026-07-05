@@ -1,18 +1,19 @@
 import os
 import httpx
 
-async def fetch_tavily_research(query: str, category: str = "analisis") -> str:
+async def fetch_tavily_research(query: str, category: str = "analisis") -> list:
     api_key = os.getenv("TAVILY_API_KEY")
     if not api_key:
         print("TAVILY_API_KEY no está configurada. Saltando investigación web real.")
-        return "No hay datos de internet disponibles (Falta API Key)."
+        return []
 
     payload = {
         "api_key": api_key,
         "query": query,
         "search_depth": "basic",
         "include_answer": False,
-        "max_results": 10 if category == "novedades" else 5
+        "include_raw_content": True, # Extrae todo el texto de la web, no solo un resumen
+        "max_results": 7 # Límite ideal para el plan Free (5-10)
     }
 
     # Time-awareness para noticias
@@ -30,19 +31,12 @@ async def fetch_tavily_research(query: str, category: str = "analisis") -> str:
             
             if response.status_code != 200:
                 print(f"Error en Tavily API: {response.text}")
-                return "Error al buscar información en internet."
+                return []
 
             data = response.json()
             results = data.get('results', [])
             
-            if not results:
-                return "No se encontró información en internet sobre esto."
-
-            combined_content = "\n".join(
-                [f"Fuente: {r.get('title')}\nContenido: {r.get('content')}\n---" for r in results]
-            )
-
-            return combined_content
+            return results
     except Exception as e:
         print(f"Fallo inesperado al consultar Tavily: {e}")
-        return "Error de red al investigar."
+        return []

@@ -12,7 +12,7 @@ El nombre que viene de la API a veces tiene subtítulos molestos (ej. "Part 3", 
 Debes devolver ESTRICTAMENTE un objeto JSON con el siguiente formato:
 {
   "cleanTitle": "Nombre limpio de la franquicia o título con sentido",
-  "topicFocus": "Breve instrucción de 1 párrafo para el escritor sobre qué enfoque darle al artículo basado en la sinopsis y categoría",
+  "topicFocus": "Instrucción estricta para el escritor sobre qué enfoque darle (ej. Si la categoría es CURIOSIDADES, ordénale centrarse SOLO en listar secretos y easter eggs).",
   "selectedImages": ["url1", "url2", "url3"] // Selecciona hasta 3 o 4 imágenes, si hay disponibles, que tengan sentido
 }
 """
@@ -23,7 +23,7 @@ Título Original: {data.get("title")}
 Sinopsis: {data.get("synopsis")}
 Año: {data.get("year", "N/A")}
 Géneros: {", ".join(data.get("genres", [])) or "Varios"}
-Calificación: {data.get("score", "N/A")}/10
+Calificación (MyAnimeList): {data.get("score", "N/A")}/10
 {images_context}
 
 Genera el JSON del Briefing:
@@ -31,7 +31,29 @@ Genera el JSON del Briefing:
     return json.dumps([{"role": "system", "content": system}, {"role": "user", "content": user}])
 
 
-def get_researcher_prompt(category: str, clean_title: str, tavily_data: str) -> str:
+def get_researcher_map_prompt(category: str, clean_title: str, single_source: dict) -> str:
+    system = """
+Eres un Asistente de Investigación (Fase MAP).
+Tu trabajo es leer el texto extraído de una ÚNICA página web y extraer SÓLO los hechos verificables, datos y citas útiles sobre el anime indicado, ignorando la basura de la web.
+Devuelve ESTRICTAMENTE un objeto JSON con este formato:
+{
+  "facts": ["Hecho 1", "Hecho 2", ...]
+}
+"""
+    user = f"""
+CATEGORÍA: {category.upper()}
+ANIME: {clean_title}
+
+FUENTE: {single_source.get('title')}
+CONTENIDO:
+{str(single_source.get('raw_content') or single_source.get('content'))[:3500]}
+
+Extrae los hechos relevantes para el anime y categoría en el JSON solicitado:
+"""
+    return json.dumps([{"role": "system", "content": system}, {"role": "user", "content": user}])
+
+
+def get_researcher_reduce_prompt(category: str, clean_title: str, all_mapped_facts: list) -> str:
     today_date = datetime.now().strftime("%Y-%m-%d")
     
     if category == 'novedades':
@@ -40,113 +62,76 @@ def get_researcher_prompt(category: str, clean_title: str, tavily_data: str) -> 
   "context": "Breve contexto del anime para quien no lo conoce",
   "keyFacts": ["Dato clave 1", "Dato clave 2"]
 }"""
-        extra_instruction = f"HOY ES {today_date}. Esta es una noticia de ÚLTIMA HORA. Ignora información de años pasados y céntrate en los anuncios recientes."
+        extra_instruction = f"HOY ES {today_date}. Esta es una noticia de ÚLTIMA HORA. Extrae la verdad de los fragmentos."
     elif category == 'curiosidades':
         json_format = """{
   "triviaList": [
-    "Dato curioso o easter egg 1",
-    "Dato curioso o easter egg 2",
-    "Dato curioso o easter egg 3",
-    "Dato curioso o easter egg 4",
-    "Dato curioso o easter egg 5"
+    "Dato curioso detallado 1",
+    "Dato curioso detallado 2",
+    "..."
   ]
 }"""
-        extra_instruction = "Busca secretos de producción, datos del mangaka, curiosidades del lore, etc."
+        extra_instruction = "Consolida los hechos en una lista rica de curiosidades y secretos de producción sin repetirse."
     else: # analisis
         json_format = """{
-  "studio": "Estudio de animación (si se menciona, sino 'Desconocido')",
+  "studio": "Estudio de animación (o Desconocido)",
   "characters": ["Nombre 1 - Breve rol", "Nombre 2 - Breve rol"],
-  "realSynopsis": "Resumen detallado de la trama real según internet",
+  "realSynopsis": "Resumen detallado de la trama real",
   "keyFacts": ["Dato interesante de animación", "Dato interesante de recepción"]
 }"""
-        extra_instruction = "Extrae datos precisos sobre la trama general, los personajes y el recibimiento crítico."
+        extra_instruction = "Consolida los hechos precisos sobre la trama general, los personajes y el recibimiento crítico."
 
     system = f"""
-Eres el Investigador Experto de KenkoAnime. Tu trabajo es leer información cruda extraída de internet (mediante web scraping) y convertirla en un "Dossier de Datos Duros" altamente preciso.
-Debes extraer la verdad absoluta para evitar que el Escritor invente datos (alucinaciones).
-
+Eres el Investigador Principal (Fase REDUCE).
+Has recibido una lista de hechos extraídos de múltiples fuentes web sobre el anime.
+Tu trabajo es consolidarlos, eliminar duplicados y devolver un "Dossier Maestro" estructurado.
 {extra_instruction}
 
 CRÍTICO:
-Debes devolver ESTRICTAMENTE un objeto JSON con el siguiente formato. 
-IMPORTANTE: NUNCA uses comillas dobles (") dentro de los textos, usa comillas simples (') para evitar romper el formato JSON.
+Debes devolver ESTRICTAMENTE un objeto JSON con el siguiente formato. NO uses comillas dobles (") dentro de los textos.
 {json_format}
 """
     user = f"""
-TÍTULO DEL ANIME: {clean_title}
+ANIME: {clean_title}
 
-DATOS EXTRAÍDOS DE INTERNET (Tavily):
-{tavily_data}
+HECHOS RECOPILADOS DE MÚLTIPLES FUENTES:
+{json.dumps(all_mapped_facts, ensure_ascii=False)}
 
-Genera el JSON del Dossier (Solo responde con el objeto JSON válido):
+Genera el Dossier Maestro en JSON:
 """
     return json.dumps([{"role": "system", "content": system}, {"role": "user", "content": user}])
 
 
-def get_writer_prompt(category: str, editor_briefing: dict, raw_data: dict, research_dossier: dict) -> str:
-    if category == 'novedades':
-        estructura = """ESTRUCTURA OBLIGATORIA (Mínimo 500 palabras):
-- H1: [Titular de la Noticia]
-- Introducción: Directo al grano (Qué pasó). 2 párrafos.
-- [Inserta una imagen aquí si hay]
-- H2: El Anuncio / La Novedad: Desarrollo profundo de la noticia. Mínimo 3 párrafos.
-- H2: Contexto: Análisis detallado de qué trata este anime para quien no lo conoce. Mínimo 2 párrafos.
-- [Inserta otra imagen aquí si hay]"""
-    elif category == 'curiosidades':
-        estructura = """ESTRUCTURA OBLIGATORIA (Mínimo 800 palabras):
-- H1: [Número] Cosas que no sabías de [Anime]
-- Introducción: Gancho emocional extenso para los fans.
-- [Inserta una imagen aquí si hay]
-- H2: [Título de Curiosidad 1] (Mínimo 2 párrafos largos)
-- H2: [Título de Curiosidad 2] (Mínimo 2 párrafos largos)
-- [Inserta otra imagen aquí si hay]
-- H2: [Título de Curiosidad 3] (Mínimo 2 párrafos largos)
-- H2: [Título de Curiosidad 4] (Mínimo 2 párrafos largos)
-- H2: [Título de Curiosidad 5] (Mínimo 2 párrafos largos)"""
-    else: # analisis
-        estructura = """ESTRUCTURA OBLIGATORIA (Mínimo 1000 palabras):
-- H1: Análisis Profundo / Por qué ver [Anime]
-- Introducción: Gancho emocional y sinopsis expansiva.
-- [Inserta una imagen aquí si hay]
-- H2: ¿De qué trata? (La Historia sin Spoilers detallada, mínimo 3 párrafos)
-- H2: Personajes Clave (Análisis profundo de motivaciones, mínimo 3 párrafos)
-- [Inserta otra imagen aquí si hay]
-- H2: Animación y Aspectos Técnicos (Mínimo 2 párrafos)
-- H2: Veredicto Final / ¿Para quién es? (Mínimo 2 párrafos)"""
-
+def get_section_writer_prompt(category: str, section_title: str, dossier: dict, images: list, previous_summary: str) -> str:
     system = f"""
-Eres un Redactor Experto (Writer) de KenkoAnime, un blog premium de anime. Tu estilo es informativo, entretenido y otaku.
-Vas a recibir un "Briefing" del Editor, datos crudos de la API, y un "Dossier" verídico del Investigador.
+Eres un Redactor Experto de KenkoAnime, escribiendo un artículo paso a paso.
+Se te ha pedido escribir ÚNICAMENTE la sección actual: "{section_title}".
 
 CRÍTICO: 
-1. Tu respuesta DEBE ser ÚNICAMENTE el artículo redactado en formato Markdown en ESPAÑOL. NO devuelvas JSON. No uses inglés.
-2. NO INVENTES NADA. Usa estrictamente los datos proporcionados en el Dossier de Investigación y los Datos Crudos.
-3. Debes insertar las imágenes seleccionadas por el editor DENTRO de tu Markdown usando ![Descripción](URL) justo después de los subtítulos.
-4. REGLA DE EXTENSIÓN ESTRICTA: Escribe TODO el contenido en Español. Eres un experto en SEO y redacción persuasiva. Los artículos deben ser MUY LARGOS Y DETALLADOS. Debes profundizar excesivamente en cada sección. Cada H2 debe contener obligatoriamente entre 2 y 4 párrafos extensos (al menos 80 palabras por párrafo). ¡NO SEAS BREVE! Tómate tu tiempo para describir las emociones, el contexto y la importancia de la información. Exprime tu creatividad al máximo.
-
-{estructura}
+1. Devuelve ÚNICAMENTE el texto en Markdown de esta sección en ESPAÑOL. No incluyas el JSON ni bloques de código.
+2. NO INVENTES NADA. Usa estrictamente los datos proporcionados en el Dossier Maestro.
+3. Debes desarrollar esta sección ampliamente (al menos 80-100 palabras por párrafo). ¡NO SEAS BREVE! Profundiza en lore, personalidad, impacto emocional, o los detalles del anuncio.
+4. REGLA ANTI-ALUCINACIÓN (CERO INVENTOS): NO inventes nombres de canciones (openings/endings), directores, estudios, actores de voz o formatos. Si el Dossier no lo menciona explícitamente, NO LO PONGAS.
+5. NO repitas información que ya se cubrió en las secciones anteriores (lee el resumen de lo ya escrito).
 """
     
-    selected_images = editor_briefing.get("selectedImages", [])
-    images_instruction = "No hay imágenes extra para insertar en el cuerpo del artículo."
-    if selected_images:
-        images_instruction = f"Imágenes a usar (NO LAS REPITAS, ÚSALAS TODAS 1 VEZ): {', '.join(selected_images)}\nRecuerda colocar las imágenes después de los subtítulos."
+    images_instruction = "No hay imágenes para insertar en esta sección."
+    if images:
+        images_instruction = f"INSERTA ESTA IMAGEN DENTRO DE TU TEXTO (después del primer párrafo de la sección) USANDO MARKDOWN: ![Descripción visual]({images[0]})"
 
     user = f"""
-DATOS CRUDOS (API):
-Géneros: {", ".join(raw_data.get("genres", [])) or "Varios"}
-Año: {raw_data.get("year", "N/A")}
-Calificación: {raw_data.get("score", "N/A")}/10
+SECCIÓN A ESCRIBIR AHORA:
+## {section_title}
 
-BRIEFING DEL EDITOR:
-Anime: {editor_briefing.get("cleanTitle")}
-Enfoque Solicitado: {editor_briefing.get("topicFocus")}
+RESUMEN DE SECCIONES YA ESCRITAS (¡No repitas esta información!):
+{previous_summary or "Esta es la primera sección (Introducción), no hay nada escrito aún."}
+
+DOSSIER MAESTRO (Tu única fuente de verdad):
+{json.dumps(dossier, indent=2, ensure_ascii=False)}
+
 {images_instruction}
 
-DOSSIER DE INVESTIGACIÓN (¡Usa estos datos reales!):
-{json.dumps(research_dossier, indent=2, ensure_ascii=False)}
-
-¡Escribe solo el Markdown en Español siguiendo la ESTRUCTURA OBLIGATORIA para la categoría {category.upper()}, asegurándote de que sea un artículo muy largo y detallado!
+Escribe el Markdown ÚNICAMENTE para la sección "{section_title}" con muchísima profundidad y análisis, respetando las reglas anti-alucinación:
 """
     return json.dumps([{"role": "system", "content": system}, {"role": "user", "content": user}])
 
@@ -179,7 +164,8 @@ Tu trabajo es empaquetar esto en el formato JSON estricto requerido por la base 
 CRÍTICO:
 1. DEBES escapar TODOS los saltos de línea dentro de las cadenas de texto Markdown usando \\n. NO uses saltos de línea literales (Enters).
 2. Verifica que las comillas dobles dentro del markdown estén escapadas si es necesario.
-3. El JSON debe ser perfecto y crudo (sin bloques de código ```json).
+3. CONTROL DE VERACIDAD (FACT-CHECKING): Si notas que las versiones generadas mencionan nombres de canciones, bandas, o directores muy específicos que parecen alucinaciones obvias o fuera de lugar, suavízalo o recorta esas partes al empaquetar el contenido final.
+4. El JSON debe ser perfecto y crudo (sin bloques de código ```json).
 
 Formato requerido:
 {

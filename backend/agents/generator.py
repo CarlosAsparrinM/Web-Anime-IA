@@ -5,11 +5,13 @@ import re
 import random
 from slugify import slugify
 from agents.sources import fetch_random_anime, fetch_seasonal_anime, fetch_top_anime, fetch_anime_news
-from agents.prompts import get_editor_prompt, get_researcher_prompt, get_writer_prompt, get_translator_prompt, get_reviewer_prompt
+from agents.prompts import get_editor_prompt, get_translator_prompt, get_reviewer_prompt
 from agents.categories import get_category_for_today
 from agents.tavily import fetch_tavily_research
 
-async def call_llm(prompt_json_string: str, max_tokens: int = 8000) -> str:
+import asyncio
+
+async def call_llm(prompt_json_string: str, max_tokens: int = 8000, max_retries: int = 3) -> str:
     api_url = os.getenv("API_ONE_URL", "http://localhost:3000")
     api_key = os.getenv("API_ONE_KEY")
 
@@ -18,29 +20,39 @@ async def call_llm(prompt_json_string: str, max_tokens: int = 8000) -> str:
 
     messages = json.loads(prompt_json_string)
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        response = await client.post(
-            f"{api_url}/v1/chat/completions",
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {api_key}"
-            },
-            json={
-                "model": "api-fallback",
-                "messages": messages,
-                "temperature": 0.7,
-                "max_tokens": max_tokens
-            }
-        )
+    for attempt in range(max_retries):
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                response = await client.post(
+                    f"{api_url}/v1/chat/completions",
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {api_key}"
+                    },
+                    json={
+                        "model": "api-fallback",
+                        "messages": messages,
+                        "temperature": 0.7,
+                        "max_tokens": max_tokens
+                    }
+                )
 
-        if response.status_code != 200:
-            raise Exception(f"API-One failed: {response.text}")
+                if response.status_code != 200:
+                    raise Exception(f"API-One failed with status {response.status_code}: {response.text}")
 
-        ai_result = response.json()
-        if not ai_result.get("choices") or len(ai_result["choices"]) == 0:
-            raise Exception("API-One returned empty choices array")
+                ai_result = response.json()
+                if not ai_result.get("choices") or len(ai_result["choices"]) == 0:
+                    raise Exception("API-One returned empty choices array")
 
-        return ai_result["choices"][0]["message"]["content"]
+                return ai_result["choices"][0]["message"]["content"]
+        except Exception as e:
+            if attempt == max_retries - 1:
+                print(f"Call to LLM failed after {max_retries} attempts. Last error: {e}")
+                raise e
+            
+            backoff_time = 2 ** attempt
+            print(f"LLM call failed (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {backoff_time}s...")
+            await asyncio.sleep(backoff_time)
 
 async def generate_article(force_category: str = None):
     print("1. Starting Multi-Agent Generation Pipeline (5 Phases)")
@@ -81,9 +93,11 @@ async def generate_article(force_category: str = None):
     print(f"- Editor Clean Title: {editor_briefing.get('cleanTitle')}")
 
     # ---------------------------------------------------------
-    # ITERATION 2: RESEARCHER
+    # ITERATION 2: RESEARCHER (MAP-REDUCE)
     # ---------------------------------------------------------
-    print("4. ITERATION 2: Calling Researcher Agent (Tavily)...")
+    from agents.prompts import get_researcher_map_prompt, get_researcher_reduce_prompt, get_section_writer_prompt
+    
+    print("4. ITERATION 2: Calling Researcher Agent (MAP-REDUCE)...")
     if category == 'novedades':
         search_query = f"{editor_briefing.get('cleanTitle')} anime latest news update announcements site:animenewsnetwork.com OR site:crunchyroll.com/news OR site:reddit.com/r/anime OR site:myanimelist.net/news OR site:comicbook.com/anime OR site:sportskeeda.com/anime"
     elif category == 'curiosidades':
@@ -91,26 +105,83 @@ async def generate_article(force_category: str = None):
     else:
         search_query = f"{editor_briefing.get('cleanTitle')} anime plot characters animation review"
         
-    tavily_data = await fetch_tavily_research(search_query, category)
+    tavily_results = await fetch_tavily_research(search_query, category)
     
-    researcher_prompt = get_researcher_prompt(category, editor_briefing.get("cleanTitle"), tavily_data)
-    researcher_response_raw = await call_llm(researcher_prompt, 1500)
+    all_facts = []
+    if tavily_results and isinstance(tavily_results, list):
+        for i, source in enumerate(tavily_results):
+            print(f"- Mapping source {i+1}/{len(tavily_results)}: {source.get('title')}")
+            map_prompt = get_researcher_map_prompt(category, editor_briefing.get("cleanTitle"), source)
+            try:
+                map_res = await call_llm(map_prompt, 1000)
+                json_match = re.search(r'\{[\s\S]*\}', map_res)
+                if json_match:
+                    all_facts.append(json.loads(json_match.group(0)))
+            except Exception as e:
+                print(f"Failed to map source {i+1}: {e}")
+    
+    print("- Reducing facts into Master Dossier...")
+    reduce_prompt = get_researcher_reduce_prompt(category, editor_briefing.get("cleanTitle"), all_facts)
+    reduce_res = await call_llm(reduce_prompt, 2000)
     
     try:
-        json_match = re.search(r'\{[\s\S]*\}', researcher_response_raw)
+        json_match = re.search(r'\{[\s\S]*\}', reduce_res)
         if not json_match:
             raise ValueError("No JSON found")
         research_dossier = json.loads(json_match.group(0))
     except Exception as e:
-        print("Researcher failed JSON parse, using fallback.", researcher_response_raw)
-        research_dossier = {"error": "Failed to parse researcher output", "raw": tavily_data}
+        print("Researcher REDUCE failed JSON parse, using fallback.", reduce_res)
+        research_dossier = {"error": "Failed to parse researcher output", "raw": all_facts}
 
     # ---------------------------------------------------------
-    # ITERATION 3: WRITER (Spanish Only)
+    # ITERATION 3: WRITER (Iterative Section by Section)
     # ---------------------------------------------------------
-    print("5. ITERATION 3: Calling Writer Agent (Spanish Only)...")
-    writer_prompt = get_writer_prompt(category, editor_briefing, source_data, research_dossier)
-    spanish_markdown = await call_llm(writer_prompt, 8000)
+    print("5. ITERATION 3: Calling Writer Agent (Iterative)...")
+    
+    def get_outline_for_category(cat: str, dos: dict, title: str) -> list:
+        if cat == 'curiosidades':
+            trivia_list = dos.get("triviaList", [])
+            num_items = len(trivia_list) if trivia_list else 5
+            out = [f"Introducción: {num_items} Cosas que no sabías de {title}"]
+            for j in range(1, num_items + 1):
+                out.append(f"Curiosidad #{j}")
+            return out
+        elif cat == 'novedades':
+            return ["Titular y Resumen de la Noticia", "El Anuncio a Fondo", "Contexto del Anime"]
+        else:
+            return [f"Introducción y Análisis de {title}", "¿De qué trata?", "Personajes Clave", "Animación y Técnica", "Veredicto Final"]
+
+    def distribute_images(sel_imgs: list, out: list) -> dict:
+        img_map = {}
+        idx = 0
+        for j in range(1, len(out), 2):
+            if idx < len(sel_imgs):
+                img_map[j] = [sel_imgs[idx]]
+                idx += 1
+        for j in range(1, len(out)):
+            if idx < len(sel_imgs) and j not in img_map:
+                img_map[j] = [sel_imgs[idx]]
+                idx += 1
+        return img_map
+        
+    outline = get_outline_for_category(category, research_dossier, editor_briefing.get("cleanTitle"))
+    image_distribution = distribute_images(editor_briefing.get("selectedImages", []), outline)
+    
+    spanish_markdown = ""
+    previous_summary = ""
+    
+    for i, section_title in enumerate(outline):
+        print(f"- Writing section {i+1}/{len(outline)}: {section_title}")
+        section_images = image_distribution.get(i, [])
+        section_prompt = get_section_writer_prompt(category, section_title, research_dossier, section_images, previous_summary)
+        
+        try:
+            section_text = await call_llm(section_prompt, 2000)
+            spanish_markdown += section_text + "\n\n"
+            previous_summary += f"- Sección '{section_title}' ya redactada.\n"
+        except Exception as e:
+            print(f"Failed to write section {section_title}: {e}")
+            
     print(f"- Writer generated {len(spanish_markdown)} characters of Spanish Markdown.")
 
     # ---------------------------------------------------------

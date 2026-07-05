@@ -3,12 +3,22 @@ from fastapi import FastAPI, HTTPException, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from database import get_db
+from models import ArticleModel
 from agents.generator import generate_article
+from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
 load_dotenv(dotenv_path="../frontend/.env.local")
 
 app = FastAPI(title="KenkoAnime AI Agents Backend")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # En producción cambiar por dominio específico
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.get("/")
 def read_root():
@@ -26,8 +36,8 @@ async def api_generate(secret: str = None, category: str = None, force: bool = F
 
     if not force:
         # Simplistic check for today's article
-        from datetime import datetime
-        start_of_day = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        from datetime import datetime, timezone
+        start_of_day = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         existing = await articles_collection.find_one({"createdAt": {"$gte": start_of_day}})
         if existing:
             return JSONResponse(
@@ -38,19 +48,23 @@ async def api_generate(secret: str = None, category: str = None, force: bool = F
     try:
         generated_data = await generate_article(force_category=category)
         
-        from datetime import datetime
-        generated_data["createdAt"] = datetime.utcnow()
-        generated_data["updatedAt"] = datetime.utcnow()
+        from datetime import datetime, timezone
+        generated_data["createdAt"] = datetime.now(timezone.utc)
+        generated_data["updatedAt"] = datetime.now(timezone.utc)
         
-        result = await articles_collection.insert_one(generated_data)
-        generated_data["_id"] = str(result.inserted_id)
+        # Validar con Pydantic antes de insertar
+        validated_article = ArticleModel(**generated_data)
+        insert_data = validated_article.model_dump()
+        
+        result = await articles_collection.insert_one(insert_data)
+        insert_data["_id"] = str(result.inserted_id)
         
         # Remove datetime objects for JSON serialization
-        generated_data["createdAt"] = generated_data["createdAt"].isoformat()
-        generated_data["updatedAt"] = generated_data["updatedAt"].isoformat()
+        insert_data["createdAt"] = insert_data["createdAt"].isoformat()
+        insert_data["updatedAt"] = insert_data["updatedAt"].isoformat()
 
         return JSONResponse(
-            content={"message": "Article generated and saved successfully.", "article": generated_data},
+            content={"message": "Article generated and saved successfully.", "article": insert_data},
             status_code=201
         )
     except Exception as e:

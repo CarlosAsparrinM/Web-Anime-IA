@@ -2,12 +2,13 @@
 
 import { useLanguage } from './LanguageProvider';
 import ReactMarkdown from 'react-markdown';
+import { ArticleData } from './ArticleCard';
 
 export default function ArticleRenderer({ 
   article, 
   createdAt 
 }: { 
-  article: any, 
+  article: ArticleData, 
   createdAt: string 
 }) {
   const { language } = useLanguage();
@@ -22,20 +23,11 @@ export default function ArticleRenderer({
 
   return (
     <>
-      <div style={{ textAlign: 'center', marginBottom: '3rem' }}>
-        <span style={{
-          background: 'rgba(139, 92, 246, 0.2)',
-          color: 'var(--neon-purple)',
-          padding: '0.5rem 1rem',
-          borderRadius: '20px',
-          fontWeight: 600,
-          textTransform: 'uppercase',
-          letterSpacing: '1px',
-          fontSize: '0.8rem'
-        }}>
+      <div className="hero-header" style={{ paddingBottom: '1rem' }}>
+        <span className="badge-purple">
           {article.category}
         </span>
-        <h1 style={{ fontSize: '2.5rem', marginTop: '1.5rem', lineHeight: 1.2 }}>
+        <h1 className="hero-title" style={{ fontSize: '2.5rem', marginTop: '1.5rem' }}>
           {title}
         </h1>
         <div style={{ color: '#64748b', marginTop: '1rem' }}>

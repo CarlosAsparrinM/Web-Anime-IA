@@ -2,6 +2,7 @@ import httpx
 import random
 import feedparser
 import asyncio
+import re
 
 async def get_extra_images(mal_id: int) -> list:
     try:
@@ -67,10 +68,42 @@ async def fetch_anime_news() -> dict:
     
     item = random.choice(items[:min(3, len(items))])
     
+    # Intentar extraer una imagen del feed o de la URL original
+    extracted_image = None
+    
+    # Estrategia 1: Atributos estándar de RSS (por si el feed cambia a futuro)
+    if hasattr(item, 'media_thumbnail') and item.media_thumbnail:
+        extracted_image = item.media_thumbnail[0]['url']
+    elif hasattr(item, 'content'):
+        img_match = re.search(r'<img[^>]+src="([^">]+)"', item.content[0].value)
+        if img_match:
+            extracted_image = img_match.group(1)
+            
+    # Estrategia 2: Scrapear el og:image directamente de la noticia de ANN (ya que su RSS no tiene imágenes)
+    if not extracted_image and hasattr(item, 'link'):
+        try:
+            async with httpx.AsyncClient() as client:
+                res = await client.get(item.link, timeout=10.0)
+                # Buscar la etiqueta meta property="og:image" content="..."
+                og_match = re.search(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']', res.text)
+                if not og_match:
+                    og_match = re.search(r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']', res.text)
+                
+                if og_match:
+                    extracted_image = og_match.group(1)
+        except Exception:
+            pass
+            
+    # Fallback image
+    final_image = extracted_image if extracted_image else "https://images.unsplash.com/photo-1578632767115-351597cf2477?q=80&w=800&auto=format&fit=crop"
+    
+    # Remove HTML tags from summary for a clean synopsis
+    clean_summary = re.sub(r'<[^>]+>', '', item.summary) if hasattr(item, 'summary') else ""
+    
     return {
         "title": item.title or "Anime News",
-        "synopsis": item.summary or "",
-        "imageUrl": "https://images.unsplash.com/photo-1578632767115-351597cf2477?q=80&w=800&auto=format&fit=crop",
+        "synopsis": clean_summary,
+        "imageUrl": final_image,
         "genres": ["News"],
         "score": None,
         "year": None,
