@@ -12,6 +12,7 @@ export interface ArticleData {
   imageUrl: string;
   category: string;
   createdAt: string;
+  comments?: any[];
 }
 
 export default function ArticleCard({ article }: { article: ArticleData }) {
@@ -47,8 +48,9 @@ export default function ArticleCard({ article }: { article: ArticleData }) {
           <p className="article-excerpt">
             {excerpt}
           </p>
-          <div className="article-date">
-            {date}
+          <div className="article-date" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>{date}</span>
+
           </div>
         </div>
       </article>

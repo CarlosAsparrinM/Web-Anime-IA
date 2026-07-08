@@ -2,7 +2,7 @@
 
 Bienvenido a **KenkoAnime**, un portal de noticias, análisis y curiosidades sobre la industria del Anime generado **100% de manera autónoma por Inteligencia Artificial**.
 
-Este proyecto se divide en dos grandes componentes arquitectónicos: un sistema orquestador de **5 Agentes IA** en el backend (Python) y una interfaz ultrarrápida y estilizada en el frontend (Next.js).
+Este proyecto se divide en dos grandes componentes arquitectónicos: un sistema orquestador de **7 Agentes IA** en el backend (Python) y una interfaz ultrarrápida y estilizada en el frontend (Next.js).
 
 ---
 
@@ -11,24 +11,26 @@ Este proyecto se divide en dos grandes componentes arquitectónicos: un sistema 
 El repositorio está separado en dos ecosistemas distintos:
 
 ### 1. `backend/` (El Cerebro) 🧠
-Construido con **Python y FastAPI**, este es el motor de los agentes de Inteligencia Artificial. Cuando se activa, ejecuta un pipeline de 5 fases autónomas que investigan, redactan, traducen y publican contenido sin intervención humana.
+Construido con **Python y FastAPI**, este es el motor de los agentes de Inteligencia Artificial. Cuando se activa, ejecuta un pipeline de 7 fases iterativas que investigan, redactan, auditan, traducen y publican contenido sin intervención humana.
 
-**Pipeline de los 5 Agentes:**
+**Pipeline de los 7 Agentes:**
 1. **Editor:** Obtiene los datos crudos de bases de datos de anime (Jikan/MyAnimeList) y define el titular y enfoque.
 2. **Investigador:** Busca en tiempo real en la web (usando la API de Tavily) noticias y datos verídicos de las últimas 72 horas para evitar alucinaciones. Extrae un JSON estructurado.
-3. **Escritor:** Redacta un artículo extenso, detallado y apasionado en formato Markdown (exclusivamente en español).
-4. **Traductor:** Traduce el Markdown español a un inglés perfecto, respetando las rutas de imágenes y estructura.
-5. **Revisor:** Formatea los dos idiomas, agrega la metadata y guarda el artículo final en **MongoDB**.
+3. **Escritor:** Redacta un artículo extenso, detallado y apasionado en formato Markdown.
+4. **Revisor de Calidad:** Audita el artículo contra el título. Si detecta desviaciones o falta de coherencia, fuerza al Escritor a rehacer el artículo en un bucle cerrado (máx. 3 intentos).
+5. **Traductor:** Traduce el Markdown español a un inglés perfecto, respetando las rutas de imágenes y estructura.
+6. **Agente de Imágenes:** Verifica analíticamente cada URL de imagen. Si una imagen está rota o no concuerda con el anime, la sustituye dinámicamente usando DuckDuckGo Search.
+7. **Titulador SEO:** Crea un título viral, un resumen SEO optimizado y empaqueta el archivo final JSON para inyectarlo en **MongoDB**.
 
 **Tecnologías:** FastAPI, Motor (MongoDB Async), httpx, Tavily API.
 
 ### 2. `frontend/` (La Presentación) 💅
 Construido con **Next.js 16 (App Router)**, ofrece una experiencia de usuario (UX) *premium*. 
-- Diseño Cyberpunk / Dark Mode con efectos de **Glassmorphism**.
-- Animaciones suaves de entrada.
-- Totalmente responsive.
-- Soporte nativo y rápido para cambiar entre Inglés y Español (Client-side routing / Context).
-- Totalmente SEO-friendly gracias a SSR y optimización de imágenes (`next/image`).
+- **Buscador & Paginación Dinámica:** Buscador ultra rápido asíncrono y sistema de "Cargar más" sin recargar la web.
+- **Glassmorphism:** Tarjetas esmeriladas e inputs curvos con efectos de neón.
+- **SEO Automático:** Autogeneración nativa de `sitemap.xml` y `feed.xml` (RSS) para ser absorbido por Google News y crawlers web.
+- **Internacionalización:** Soporte nativo para cambiar entre Inglés y Español usando Context API.
+- Totalmente responsive y adaptado a móviles.
 
 **Tecnologías:** Next.js, React 19, CSS Vanilla (Variables/Animaciones), React-Markdown.
 

@@ -1,8 +1,10 @@
-import { getArticleBySlug } from '@/lib/articles';
+import { getArticleBySlug, getRelatedArticles } from '@/lib/articles';
 import { notFound } from 'next/navigation';
 import type { Metadata } from 'next';
 import ArticleRenderer from '@/components/ArticleRenderer';
 import Image from 'next/image';
+import CommentsSection from '@/components/CommentsSection';
+import RelatedArticles from '@/components/RelatedArticles';
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
   const resolvedParams = await params;
@@ -30,6 +32,8 @@ export default async function ArticlePage({ params }: { params: Promise<{ slug: 
     notFound();
   }
 
+  const relatedArticles = await getRelatedArticles(article.slug, article.tags || [], 4);
+
   return (
     <article style={{ maxWidth: '800px', margin: '0 auto', paddingBottom: '4rem' }} className="animate-fade-in">
       <div style={{ position: 'relative', width: '100%', height: '400px', borderRadius: '16px', overflow: 'hidden', marginBottom: '2rem' }}>
@@ -50,6 +54,9 @@ export default async function ArticlePage({ params }: { params: Promise<{ slug: 
       </div>
       
       <ArticleRenderer article={article} createdAt={article.createdAt} />
+      
+      <CommentsSection slug={article.slug} initialComments={article.comments || []} />
+      <RelatedArticles articles={relatedArticles} />
     </article>
   );
 }

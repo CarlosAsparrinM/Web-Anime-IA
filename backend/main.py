@@ -8,7 +8,7 @@ from agents.generator import generate_article
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
-load_dotenv(dotenv_path="../frontend/.env.local")
+load_dotenv()
 
 app = FastAPI(title="KenkoAnime AI Agents Backend")
 

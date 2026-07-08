@@ -5,7 +5,7 @@ async def fetch_tavily_research(query: str, category: str = "analisis") -> list:
     api_key = os.getenv("TAVILY_API_KEY")
     if not api_key:
         print("TAVILY_API_KEY no está configurada. Saltando investigación web real.")
-        return []
+        return [], []
 
     payload = {
         "api_key": api_key,
@@ -13,6 +13,7 @@ async def fetch_tavily_research(query: str, category: str = "analisis") -> list:
         "search_depth": "basic",
         "include_answer": False,
         "include_raw_content": True, # Extrae todo el texto de la web, no solo un resumen
+        "include_images": True,
         "max_results": 7 # Límite ideal para el plan Free (5-10)
     }
 
@@ -31,12 +32,13 @@ async def fetch_tavily_research(query: str, category: str = "analisis") -> list:
             
             if response.status_code != 200:
                 print(f"Error en Tavily API: {response.text}")
-                return []
+                return [], []
 
             data = response.json()
             results = data.get('results', [])
+            images = data.get('images', [])
             
-            return results
+            return results, images
     except Exception as e:
         print(f"Fallo inesperado al consultar Tavily: {e}")
-        return []
+        return [], []

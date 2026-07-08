@@ -25,6 +25,12 @@ const ArticleSchema = new mongoose.Schema(
     animeName: { type: String, required: true },
     tags: [{ type: String }],
     published: { type: Boolean, default: true },
+    comments: [
+      {
+        text: { type: String, required: true },
+        date: { type: Date, default: Date.now }
+      }
+    ]
   },
   { timestamps: true }
 );

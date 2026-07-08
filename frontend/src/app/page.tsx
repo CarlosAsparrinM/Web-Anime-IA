@@ -1,13 +1,10 @@
 import { getLatestArticles } from '@/lib/articles';
-import ArticleCard, { ArticleData } from '@/components/ArticleCard';
+import ArticleFeed from '@/components/ArticleFeed';
 
 export const dynamic = 'force-dynamic';
 
-export default async function Home({ searchParams }: { searchParams: Promise<{ cat?: string }> }) {
-  const params = await searchParams;
-  const category = params.cat;
-  
-  const articles = await getLatestArticles(12, category);
+export default async function Home() {
+  const { articles, total } = await getLatestArticles(12);
 
   return (
     <div className="container">
@@ -20,18 +17,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ c
         </p>
       </section>
 
-      <section className="article-grid">
-        {articles.length === 0 ? (
-          <div className="empty-state">
-            <h2>Aún no hay artículos publicados.</h2>
-            <p>Vuelve mañana o ejecuta el generador manualmente.</p>
-          </div>
-        ) : (
-          articles.map((article: ArticleData) => (
-            <ArticleCard key={article._id} article={article} />
-          ))
-        )}
-      </section>
+      <ArticleFeed initialArticles={articles} initialTotal={total} />
     </div>
   );
 }

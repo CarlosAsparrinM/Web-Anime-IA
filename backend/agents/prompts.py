@@ -18,9 +18,12 @@ Debes devolver ESTRICTAMENTE un objeto JSON con el siguiente formato:
 """
     user = f"""
 CATEGORÍA DEL ARTÍCULO: {category.upper()}
-DATOS CRUDOS:
+DATOS CRUDOS E INMUTABLES (HARD FACTS):
 Título Original: {data.get("title")}
 Sinopsis: {data.get("synopsis")}
+Estudios: {", ".join(data.get("studios", [])) or "Desconocido"}
+Episodios: {data.get("episodes", "N/A")}
+Estado: {data.get("status", "N/A")}
 Año: {data.get("year", "N/A")}
 Géneros: {", ".join(data.get("genres", [])) or "Varios"}
 Calificación (MyAnimeList): {data.get("score", "N/A")}/10
@@ -35,9 +38,23 @@ def get_researcher_map_prompt(category: str, clean_title: str, single_source: di
     system = """
 Eres un Asistente de Investigación (Fase MAP).
 Tu trabajo es leer el texto extraído de una ÚNICA página web y extraer SÓLO los hechos verificables, datos y citas útiles sobre el anime indicado, ignorando la basura de la web.
-Devuelve ESTRICTAMENTE un objeto JSON con este formato:
+
+CRÍTICO - LISTA NEGRA: Descarta INMEDIATAMENTE cualquier dato que:
+- Provenga de Instagram, TikTok, Reddit, Twitter, YouTube.
+- Sea una opinión, especulación o teoría de fans.
+- Mencione seguidores, likes, views, posts, stories, hashtags.
+- Mencione rumores, leaks, merchandising, cosplay o fanarts.
+- Contenga frases como "podría", "se espera", "los fans creen".
+
+Devuelve ESTRICTAMENTE un objeto JSON con este formato asignando un nivel de confianza y la fuente origen (título de la web):
 {
-  "facts": ["Hecho 1", "Hecho 2", ...]
+  "facts": [
+    {
+      "fact": "Hecho verificado detallado",
+      "confidence": "HIGH | MEDIUM | LOW",
+      "source": "Nombre de la fuente"
+    }
+  ]
 }
 """
     user = f"""
@@ -58,33 +75,45 @@ def get_researcher_reduce_prompt(category: str, clean_title: str, all_mapped_fac
     
     if category == 'novedades':
         json_format = """{
-  "newsEvent": "Qué pasó exactamente (el evento o anuncio)",
-  "context": "Breve contexto del anime para quien no lo conoce",
-  "keyFacts": ["Dato clave 1", "Dato clave 2"]
+  "headline": "¿Qué ocurrió exactamente?",
+  "whoAnnounced": "¿Quién lo anunció oficialmente?",
+  "when": "Fecha del anuncio",
+  "where": "Fuente oficial",
+  "whyItMatters": "¿Por qué es importante?",
+  "whatChanges": "¿Qué cambia respecto a antes?",
+  "context": "Contexto del anime para nuevos lectores",
+  "verifiedFacts": ["Dato verificado 1", "Dato verificado 2"]
 }"""
-        extra_instruction = f"HOY ES {today_date}. Esta es una noticia de ÚLTIMA HORA. Extrae la verdad de los fragmentos."
+        extra_instruction = f"HOY ES {today_date}. Esta es una noticia de ÚLTIMA HORA. NO conviertas rumores en hechos ni expectativas en anuncios. NO uses 'los fans esperan...' sin declaración oficial."
     elif category == 'curiosidades':
         json_format = """{
   "triviaList": [
-    "Dato curioso detallado 1",
-    "Dato curioso detallado 2",
-    "..."
+    {
+      "fact": "Dato curioso real",
+      "context": "¿Por qué es interesante?",
+      "source": "Fuente original"
+    }
   ]
 }"""
-        extra_instruction = "Consolida los hechos en una lista rica de curiosidades y secretos de producción sin repetirse."
+        extra_instruction = "Cada curiosidad DEBE cumplir TODAS estas reglas: Ocurrió realmente, está relacionada directamente con el anime/producción, NUNCA redes sociales o métricas de likes."
     else: # analisis
         json_format = """{
-  "studio": "Estudio de animación (o Desconocido)",
-  "characters": ["Nombre 1 - Breve rol", "Nombre 2 - Breve rol"],
-  "realSynopsis": "Resumen detallado de la trama real",
-  "keyFacts": ["Dato interesante de animación", "Dato interesante de recepción"]
+  "officialSynopsis": "Resumen fiel de la trama",
+  "production": { "studio": "", "director": "", "writer": "", "composer": "", "year": "" },
+  "themes": ["Tema 1", "Tema 2", "Tema 3"],
+  "characters": [{ "name": "", "role": "", "traits": "" }],
+  "worldBuilding": ["Detalle 1", "Detalle 2"],
+  "lore": ["Secreto 1", "Mito 2"],
+  "criticalReception": ["Recepción 1"],
+  "interestingFacts": ["Producción secreta"]
 }"""
-        extra_instruction = "Consolida los hechos precisos sobre la trama general, los personajes y el recibimiento crítico."
+        extra_instruction = "Construye un dossier enciclopédico sumamente rico y profundo."
 
     system = f"""
 Eres el Investigador Principal (Fase REDUCE).
 Has recibido una lista de hechos extraídos de múltiples fuentes web sobre el anime.
 Tu trabajo es consolidarlos, eliminar duplicados y devolver un "Dossier Maestro" estructurado.
+CRÍTICO: SOLAMENTE acepta hechos que vengan marcados con confidence: "HIGH". Descarta los MEDIUM o LOW.
 {extra_instruction}
 
 CRÍTICO:
@@ -102,16 +131,41 @@ Genera el Dossier Maestro en JSON:
     return json.dumps([{"role": "system", "content": system}, {"role": "user", "content": user}])
 
 
-def get_section_writer_prompt(category: str, section_title: str, dossier: dict, images: list, previous_summary: str) -> str:
+def get_fact_checker_prompt(category: str, clean_title: str, dossier: dict, raw_sources: list) -> str:
+    system = """
+Eres el Agente de Fact-Checking (Fase 3.5).
+Tu trabajo es auditar y enriquecer el Dossier Maestro generado en la fase anterior.
+1. Revisa cada afirmación del Dossier.
+2. Si un dato parece incorrecto, corrígelo. Si el dossier está muy vacío, PUEDES usar tu propio conocimiento experto sobre el anime para añadir hechos básicos, importantes y verídicos.
+3. Devuelve ÚNICAMENTE el Dossier Maestro en formato JSON, ya limpio, enriquecido y verificado.
+"""
+    # Create a simplified version of raw sources to save tokens
+    simplified_sources = [{"title": s.get("title"), "url": s.get("url")} for s in raw_sources] if isinstance(raw_sources, list) else raw_sources
+    
+    user = f"""
+ANIME: {clean_title}
+
+FUENTES CRUDAS ORIGINALES DE REFERENCIA:
+{json.dumps(simplified_sources, ensure_ascii=False)}
+
+DOSSIER MAESTRO A AUDITAR Y LIMPIAR:
+{json.dumps(dossier, ensure_ascii=False)}
+
+Devuelve el Dossier en JSON estrictamente verificado y libre de alucinaciones:
+"""
+    return json.dumps([{"role": "system", "content": system}, {"role": "user", "content": user}])
+
+
+def get_section_writer_prompt(category: str, section_title: str, dossier: dict, images: list, previous_summary: str, reviewer_feedback: str = "") -> str:
     system = f"""
 Eres un Redactor Experto de KenkoAnime, escribiendo un artículo paso a paso.
 Se te ha pedido escribir ÚNICAMENTE la sección actual: "{section_title}".
 
 CRÍTICO: 
 1. Devuelve ÚNICAMENTE el texto en Markdown de esta sección en ESPAÑOL. No incluyas el JSON ni bloques de código.
-2. NO INVENTES NADA. Usa estrictamente los datos proporcionados en el Dossier Maestro.
-3. Debes desarrollar esta sección ampliamente (al menos 80-100 palabras por párrafo). ¡NO SEAS BREVE! Profundiza en lore, personalidad, impacto emocional, o los detalles del anuncio.
-4. REGLA ANTI-ALUCINACIÓN (CERO INVENTOS): NO inventes nombres de canciones (openings/endings), directores, estudios, actores de voz o formatos. Si el Dossier no lo menciona explícitamente, NO LO PONGAS.
+2. USO DE FUENTES: Usa el Dossier Maestro como tu fuente principal de información. Si el dossier no contiene suficientes detalles, DEBES usar tu propio conocimiento experto sobre el anime para enriquecer el artículo de forma verídica y atractiva.
+3. PROHIBIDO QUEJARSE: BAJO NINGUNA CIRCUNSTANCIA debes escribir metatextos disculpándote, mencionando el "Dossier Maestro", la "falta de información", o tus "reglas anti-alucinación". Si falta información, simplemente redacta un texto interesante con lo que sepas del anime.
+4. ESTILO Y CALIDAD: Escribe con un tono entretenido, informativo y fluido. No uses clichés robóticos, pero mantén un estándar periodístico alto.
 5. NO repitas información que ya se cubrió en las secciones anteriores (lee el resumen de lo ya escrito).
 """
     
@@ -122,6 +176,9 @@ CRÍTICO:
     user = f"""
 SECCIÓN A ESCRIBIR AHORA:
 ## {section_title}
+
+FEEDBACK DEL REVISOR (Si aplica):
+{reviewer_feedback}
 
 RESUMEN DE SECCIONES YA ESCRITAS (¡No repitas esta información!):
 {previous_summary or "Esta es la primera sección (Introducción), no hay nada escrito aún."}
@@ -155,17 +212,42 @@ TRADUCE ESTE ARTÍCULO AL INGLÉS MANTENIENDO EL FORMATO MARKDOWN:
     return json.dumps([{"role": "system", "content": system}, {"role": "user", "content": user}])
 
 
-def get_reviewer_prompt(spanish_markdown: str, english_markdown: str, editor_briefing: dict) -> str:
-    system = """
+def get_reviewer_prompt(category: str, spanish_markdown: str, editor_briefing: dict, dossier: dict) -> str:
+    system = f"""
 Eres el Revisor Final (QA) de KenkoAnime. 
-El equipo te ha entregado dos versiones del mismo artículo (una en Español y otra en Inglés).
-Tu trabajo es empaquetar esto en el formato JSON estricto requerido por la base de datos.
+El equipo te ha entregado un borrador de artículo en Español basado en una investigación previa.
+Tu trabajo es auditar la calidad del texto y decidir si se aprueba o necesita revisión.
+La categoría objetivo de este artículo es: {category.upper()}
 
 CRÍTICO:
+1. AUDITORÍA Y COHERENCIA: Revisa que el artículo tenga coherencia absoluta con la categoría ({category.upper()}) y su formato. Por ejemplo, si se prometen curiosidades, asegúrate de que el texto no se desvíe hacia una simple reseña. Todo lo que se hable debe estar estrictamente relacionado con el objetivo del artículo.
+2. DETECCIÓN DE EXCUSAS: Si el artículo contiene menciones meta textuales (ej. "No hay suficiente información", "Según mis reglas", etc.), DEBES rechazarlo (NEEDS_REVISION).
+3. Devuelve ESTRICTAMENTE un objeto JSON con este formato crudo:
+{{
+  "status": "APPROVED" | "NEEDS_REVISION",
+  "feedback": "Si es APPROVED, déjalo vacío. Si es NEEDS_REVISION, escribe instrucciones claras al redactor sobre qué párrafos o secciones arreglar."
+}}
+"""
+    user = f"""
+TÍTULO BASE DEL ANIME: {editor_briefing.get("cleanTitle")}
+
+--- DOSSIER MAESTRO (Tu única fuente de verdad) ---
+{json.dumps(dossier, indent=2, ensure_ascii=False)}
+
+--- BORRADOR EN ESPAÑOL A REVISAR ---
+{spanish_markdown}
+
+Devuelve el veredicto en JSON crudo:
+"""
+    return json.dumps([{"role": "system", "content": system}, {"role": "user", "content": user}])
+
+def get_titulator_prompt(spanish_markdown: str, english_markdown: str, editor_briefing: dict) -> str:
+    system = """
+Eres el Agente Titulador de KenkoAnime. 
+Tu trabajo es empaquetar un artículo bilingüe generado en el formato JSON estricto requerido por la base de datos.
+CRÍTICO:
 1. DEBES escapar TODOS los saltos de línea dentro de las cadenas de texto Markdown usando \\n. NO uses saltos de línea literales (Enters).
-2. Verifica que las comillas dobles dentro del markdown estén escapadas si es necesario.
-3. CONTROL DE VERACIDAD (FACT-CHECKING): Si notas que las versiones generadas mencionan nombres de canciones, bandas, o directores muy específicos que parecen alucinaciones obvias o fuera de lugar, suavízalo o recorta esas partes al empaquetar el contenido final.
-4. El JSON debe ser perfecto y crudo (sin bloques de código ```json).
+2. El JSON debe ser perfecto y crudo. NO añadas ningún saludo, explicación, ni bloques de código (```json). SOLO el objeto.
 
 Formato requerido:
 {
@@ -188,6 +270,33 @@ TÍTULO BASE DEL ANIME: {editor_briefing.get("cleanTitle")}
 --- VERSIÓN EN INGLÉS ---
 {english_markdown}
 
-Por favor, extrae títulos llamativos de los H1, genera los resúmenes (excerpts) y devuelve el JSON crudo perfecto:
+Extrae títulos llamativos, genera los resúmenes (excerpts), y devuelve el JSON crudo perfecto:
+"""
+    return json.dumps([{"role": "system", "content": system}, {"role": "user", "content": user}])
+
+def get_image_agent_prompt(anime_title: str, image_urls: list) -> str:
+    system = """
+Eres el Agente de Auditoría Visual (QA de Imágenes) de KenkoAnime.
+Tu trabajo es analizar una lista de URLs de imágenes usadas en un artículo sobre un anime específico.
+Debes determinar si cada URL (por su dominio, ruta o palabras clave en el enlace) parece tener relación con el anime o si es una imagen genérica irrelevante (como fotos de unsplash).
+
+Devuelve ESTRICTAMENTE un JSON crudo con el siguiente formato:
+{
+  "url_analysis": [
+    {
+      "url": "la_url_evaluada",
+      "status": "KEEP" | "REPLACE",
+      "reason": "Breve explicación"
+    }
+  ]
+}
+"""
+    user = f"""
+ANIME: {anime_title}
+
+URLS A EVALUAR:
+{json.dumps(image_urls, indent=2)}
+
+Devuelve el análisis en JSON crudo:
 """
     return json.dumps([{"role": "system", "content": system}, {"role": "user", "content": user}])

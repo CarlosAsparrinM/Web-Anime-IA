@@ -8,19 +8,23 @@ Este documento resume la refactorización masiva y las mejoras implementadas en 
 - **Nuevo Gateway:** La ruta en Next.js (`app/api/generate/route.ts`) ahora funciona como un proxy limpio que se comunica directamente con el servidor de FastAPI en el puerto 8000.
 
 ## 2. Mejoras en el Pipeline de Agentes IA 🧠
+- **Bucle de Revisión (Reviewer Loop):** El Pipeline pasó de ser lineal a iterativo. Si el Agente Revisor no está de acuerdo con el contenido (por falta de coherencia con el título o formato), devolverá un feedback (en JSON) al Agente Escritor para que reescriba el artículo (hasta un máximo de 3 intentos) antes de rendirse.
+- **Auditoría de Imágenes (Agente Inteligente):** Se creó el *Image QA Agent*, que analiza lógicamente si una imagen extraída de la fuente coincide con el anime real. Si encuentra una URL falsa o rota, hace uso de la herramienta `DuckDuckGo Search (DDGS)` internamente para buscar, descargar y reemplazar la imagen por una oficial en tiempo real.
+- **Agente Titulador SEO:** Ahora el título y extracto del artículo no nacen al principio de la generación, sino al final. Un agente especializado lee el artículo finalizado y empaqueta un título atractivo, un excerpt corto y formatea la estructura del JSON final para la BD.
 - **Fusión de Categorías:** Se unificaron "Reseñas" y "Recomendaciones" en una categoría súper fuerte llamada **"Análisis"**. Las categorías finales son: `novedades`, `curiosidades` y `analisis`.
-- **Filtro Anti-Noticias Viejas (Tavily):** Se le inyectó "consciencia temporal" al Investigador. Si busca `novedades`, automáticamente filtra resultados para traer solo artículos publicados en las **últimas 72 horas** desde fuentes confiables (ANN, Crunchyroll, Reddit).
-- **Nuevo Agente Traductor (Pipeline de 5 fases):** Se introdujo un 5to agente exclusivo para la traducción. Ahora el *Escritor* redacta únicamente en español (aprovechando toda su memoria para explayarse) y el *Traductor* toma ese texto y lo pasa a inglés respetando el Markdown y los enlaces de imágenes.
-- **Prevención de Textos Cortos:** Se impuso una *Regla Crítica* en los prompts exigiendo una extensión estricta (ej. mínimo 2 a 4 párrafos de 80 palabras por cada H2).
-- **Manejo de Errores (JSON Parse):** Se corrigió la tendencia de los LLMs a romper el JSON usando comillas dobles internas, obligándolos a usar comillas simples, y se implementó un sistema de fallback (emergencia) para que el orquestador no colapse si falla un parseo.
-- **Autopublicación:** Se solucionó el bug donde los artículos generados no se mostraban en el frontend al inyectar automáticamente el campo `"published": True` al guardar en MongoDB.
+- **Filtro Anti-Noticias Viejas (Tavily):** Se le inyectó "consciencia temporal" al Investigador para `novedades` (solo resultados de las últimas 72 horas).
+- **Nuevo Agente Traductor (Pipeline de 7 fases):** Se integró la fase de traducción para mantener los artículos nativamente tanto en Español como en Inglés.
+- **Manejo de Errores y JSON Parsing:** Se reescribieron los prompts para asegurar salida en JSON puro, además de rotación automática (Fallback) de LLMs (Gemini -> Llama 3 -> Cerebras) para resistir caídas de los proveedores.
 
-## 3. Rediseño Frontend (UI/UX) 💅
-- **Estética Premium (Glassmorphism):** Se añadió la clase `.glass` (backdrop-filter) para dar un efecto de cristal esmerilado a las tarjetas de los artículos.
-- **Tipografía y Colores:** Se configuró un entorno "Dark Mode" con gradientes Cyberpunk (Morado/Rosa/Cyan) para el logotipo y los títulos (`.text-gradient`).
-- **Animaciones:** Se implementaron micro-interacciones (hover en tarjetas y botones) y animaciones de entrada (`.animate-fade-in`, `.animate-slide-up`) para evitar cargas bruscas de contenido.
-- **Optimización de Imágenes (SEO):** Se reemplazaron todas las etiquetas `<img>` HTML estáticas por el componente `<Image>` nativo de Next.js. Se actualizó el `next.config.ts` para autorizar descargas dinámicas desde cualquier host remoto.
-- **Diseño Responsive:** Se reescribió el menú de navegación (`Navbar.tsx`) integrando Flex-Wrap para que se adapte perfectamente a pantallas de dispositivos móviles sin romper la maquetación.
+## 3. Rediseño Frontend e Interactividad (UI/UX) 💅
+- **Buscador en Tiempo Real:** Se implementó una barra de búsqueda (`ArticleFeed.tsx`) que filtra los artículos instantáneamente tanto por título como por nombre del anime, comunicándose vía API Routes de Next.js sin recargar la web.
+- **Filtros por Categoría (Pills):** Se eliminó el `<select>` tradicional por hermosos botones tipo "Pill" en estilo Glassmorphism que resaltan con bordes de neón interactivos (`Todos`, `Análisis`, `Novedades`, `Curiosidades`).
+- **Paginación / Scroll Asíncrono:** Se integró la función "Cargar más", reemplazando el feed inicial estático. Los usuarios pueden extraer de a 12 artículos nuevos a medida que navegan usando comandos de `$skip` en MongoDB.
+- **Estética Premium:** Múltiples mejoras CSS (fondos desenfocados, hover effects, colores degradados `.text-gradient`, animaciones `.animate-fade-in`) para garantizar una sensación de alta gama.
+
+## 3.1. Motores SEO 🚀
+- **Sitemap Dinámico:** Generación automática en `/sitemap.xml` integrando nativamente las herramientas de Next.js (MetadataRoute). Google indexará cada nueva URL de artículo generada por la IA casi en tiempo real.
+- **Feed RSS Automático:** Nuevo endpoint `/feed.xml` que transforma los últimos 20 artículos a estándar RSS 2.0. Listo para integrarse con bots de Discord y Feedly.
 
 ## 4. Integraciones y Refinamientos Recientes
 - **Reparación del Gateway Frontend:** Se actualizó `app/api/generate/route.ts` para que funcione realmente como un proxy (`fetch`) hacia FastAPI, eliminando los imports locales obsoletos.
@@ -28,6 +32,7 @@ Este documento resume la refactorización masiva y las mejoras implementadas en 
 - **Estrategia de Investigación Nativa en Inglés:** Se depuró la lista de sitios de noticias en `generator.py` para buscar exclusivamente en gigantes de la industria en inglés (`animenewsnetwork`, `crunchyroll`, `myanimelist`, `comicbook`, `sportskeeda`). Esto permite ingerir la mejor calidad de información disponible a nivel global, aprovechando que el Agente Escritor redactará nativamente en español en el siguiente paso.
 
 ## 5. Cosas por Hacer (TODO)
+- [ ] **Cola de Tareas en Backend (Task Queue):** Implementar un administrador de pausas asíncronas (`asyncio.Queue` / Celery) para distanciar la generación de múltiples artículos en el tiempo, evitando colisiones de los errores "Rate Limit (429)" al abusar de los LLMs.
 - [ ] **Configuración del LLM en API-One:** Establecer el modelo por defecto a `Qwen 3 235B Instruct` (para máxima calidad) o `Gemma 4 31B` (para balance de velocidad/calidad) en el proveedor correspondiente.
 - [ ] **Despliegue (Deploy):** Preparar el entorno de producción (ej. Subir el backend de Python a Render/Railway y el frontend a Vercel).
 - [ ] **Programación (Cron):** Configurar una tarea programada (ej. Vercel Cron o GitHub Actions) que llame al endpoint `/api/generate` de manera diaria usando el `CRON_SECRET` para mantener la página viva en automático.

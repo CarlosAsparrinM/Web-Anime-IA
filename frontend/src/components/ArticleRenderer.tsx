@@ -30,8 +30,9 @@ export default function ArticleRenderer({
         <h1 className="hero-title" style={{ fontSize: '2.5rem', marginTop: '1.5rem' }}>
           {title}
         </h1>
-        <div style={{ color: '#64748b', marginTop: '1rem' }}>
-          {dateStr}
+        <div style={{ color: '#64748b', marginTop: '1rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
+          <span>{dateStr}</span>
+
         </div>
       </div>
 

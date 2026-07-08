@@ -11,7 +11,44 @@ from agents.tavily import fetch_tavily_research
 
 import asyncio
 
-async def call_llm(prompt_json_string: str, max_tokens: int = 8000, max_retries: int = 3) -> str:
+async def get_reliable_images(title: str, source_images: list, tavily_images: list) -> list:
+    valid_images = [img for img in source_images if img]
+    if len(valid_images) >= 5:
+        return valid_images[:5]
+        
+    if tavily_images:
+        for img in tavily_images:
+            if img and img.endswith(('.jpg', '.png', '.jpeg', '.webp', '.gif')) and img not in valid_images:
+                valid_images.append(img)
+        if len(valid_images) >= 5:
+            return valid_images[:5]
+
+    print("Nivel 3: Buscando imágenes en DuckDuckGo...")
+    try:
+        def search_images():
+            from ddgs import DDGS
+            with DDGS() as ddgs:
+                return ddgs.images(f"{title} anime official art wallpaper", max_results=5)
+                
+        results = await asyncio.to_thread(search_images)
+        if results:
+            for r in results:
+                img = r.get("image")
+                if img and img not in valid_images:
+                    valid_images.append(img)
+    except Exception as e:
+        print(f"Fallo en DuckDuckGo: {e}")
+
+    if not valid_images:
+        valid_images = [
+            "https://images.unsplash.com/photo-1578632767115-351597cf2477?q=80&w=800&auto=format&fit=crop",
+            "https://images.unsplash.com/photo-1607604276583-eef5d076aa5f?q=80&w=800&auto=format&fit=crop",
+            "https://images.unsplash.com/photo-1580477655122-540c493a3885?q=80&w=800&auto=format&fit=crop"
+        ]
+
+    return valid_images[:5]
+
+async def call_llm(prompt_json_string: str, model_str: str, max_tokens: int = 8000, max_retries: int = 3) -> str:
     api_url = os.getenv("API_ONE_URL", "http://localhost:3000")
     api_key = os.getenv("API_ONE_KEY")
 
@@ -30,7 +67,7 @@ async def call_llm(prompt_json_string: str, max_tokens: int = 8000, max_retries:
                         "Authorization": f"Bearer {api_key}"
                     },
                     json={
-                        "model": "api-fallback",
+                        "model": model_str,
                         "messages": messages,
                         "temperature": 0.7,
                         "max_tokens": max_tokens
@@ -70,7 +107,22 @@ async def generate_article(force_category: str = None):
             source_data = await fetch_top_anime() if random.random() > 0.5 else await fetch_seasonal_anime()
     except Exception as e:
         print(f"Failed to fetch source data, falling back to random anime. {e}")
-        source_data = await fetch_random_anime()
+        try:
+            source_data = await fetch_random_anime()
+        except Exception as e2:
+            print(f"Fallback fetch_random_anime also failed: {e2}. Using hardcoded dummy data.")
+            source_data = {
+                "title": "Neon Genesis Evangelion",
+                "synopsis": "En el año 2015, el mundo está al borde de la destrucción...",
+                "imageUrl": "https://images.unsplash.com/photo-1578632767115-351597cf2477?q=80&w=800&auto=format&fit=crop",
+                "genres": ["Mecha", "Psychological", "Sci-Fi"],
+                "score": 8.35,
+                "year": 1995,
+                "studios": ["Gainax", "Tatsunoko Production"],
+                "episodes": 26,
+                "status": "Finished Airing",
+                "extraImages": []
+            }
 
     print(f"- Raw Title fetched: {source_data.get('title')}")
 
@@ -79,7 +131,7 @@ async def generate_article(force_category: str = None):
     # ---------------------------------------------------------
     print("3. ITERATION 1: Calling Editor Agent...")
     editor_prompt = get_editor_prompt(category, source_data)
-    editor_response_raw = await call_llm(editor_prompt, 1500)
+    editor_response_raw = await call_llm(editor_prompt, "groq:llama-3.1-8b-instant,gemini:gemini-2.5-flash,cerebras:gemma-4-31b", 1500)
     
     try:
         json_match = re.search(r'\{[\s\S]*\}', editor_response_raw)
@@ -95,17 +147,17 @@ async def generate_article(force_category: str = None):
     # ---------------------------------------------------------
     # ITERATION 2: RESEARCHER (MAP-REDUCE)
     # ---------------------------------------------------------
-    from agents.prompts import get_researcher_map_prompt, get_researcher_reduce_prompt, get_section_writer_prompt
+    from agents.prompts import get_researcher_map_prompt, get_researcher_reduce_prompt, get_fact_checker_prompt, get_section_writer_prompt, get_titulator_prompt, get_image_agent_prompt
     
     print("4. ITERATION 2: Calling Researcher Agent (MAP-REDUCE)...")
     if category == 'novedades':
         search_query = f"{editor_briefing.get('cleanTitle')} anime latest news update announcements site:animenewsnetwork.com OR site:crunchyroll.com/news OR site:reddit.com/r/anime OR site:myanimelist.net/news OR site:comicbook.com/anime OR site:sportskeeda.com/anime"
     elif category == 'curiosidades':
-        search_query = f"{editor_briefing.get('cleanTitle')} anime trivia easter eggs hidden facts"
+        search_query = f"{editor_briefing.get('cleanTitle')} anime trivia easter eggs hidden facts site:animenewsnetwork.com OR site:myanimelist.net OR site:crunchyroll.com/news OR site:fandom.com"
     else:
-        search_query = f"{editor_briefing.get('cleanTitle')} anime plot characters animation review"
+        search_query = f"{editor_briefing.get('cleanTitle')} anime plot characters animation review site:animenewsnetwork.com OR site:myanimelist.net OR site:crunchyroll.com/news OR site:fandom.com"
         
-    tavily_results = await fetch_tavily_research(search_query, category)
+    tavily_results, tavily_images = await fetch_tavily_research(search_query, category)
     
     all_facts = []
     if tavily_results and isinstance(tavily_results, list):
@@ -113,7 +165,7 @@ async def generate_article(force_category: str = None):
             print(f"- Mapping source {i+1}/{len(tavily_results)}: {source.get('title')}")
             map_prompt = get_researcher_map_prompt(category, editor_briefing.get("cleanTitle"), source)
             try:
-                map_res = await call_llm(map_prompt, 1000)
+                map_res = await call_llm(map_prompt, "groq:llama-3.3-70b-versatile,cerebras:gpt-oss-120b,gemini:gemini-2.5-pro", 1000)
                 json_match = re.search(r'\{[\s\S]*\}', map_res)
                 if json_match:
                     all_facts.append(json.loads(json_match.group(0)))
@@ -122,7 +174,7 @@ async def generate_article(force_category: str = None):
     
     print("- Reducing facts into Master Dossier...")
     reduce_prompt = get_researcher_reduce_prompt(category, editor_briefing.get("cleanTitle"), all_facts)
-    reduce_res = await call_llm(reduce_prompt, 2000)
+    reduce_res = await call_llm(reduce_prompt, "groq:llama-3.3-70b-versatile,cerebras:gpt-oss-120b,gemini:gemini-2.5-pro", 2000)
     
     try:
         json_match = re.search(r'\{[\s\S]*\}', reduce_res)
@@ -134,9 +186,27 @@ async def generate_article(force_category: str = None):
         research_dossier = {"error": "Failed to parse researcher output", "raw": all_facts}
 
     # ---------------------------------------------------------
+    # ITERATION 2.5: FACT-CHECKER
+    # ---------------------------------------------------------
+    print("4.5. ITERATION 2.5: Calling Fact-Checker Agent...")
+    fact_checker_prompt = get_fact_checker_prompt(category, editor_briefing.get("cleanTitle"), research_dossier, tavily_results)
+    fact_checker_res = await call_llm(fact_checker_prompt, "groq:llama-3.3-70b-versatile,cerebras:gpt-oss-120b,gemini:gemini-2.5-pro", 2000)
+    
+    try:
+        json_match = re.search(r'\{[\s\S]*\}', fact_checker_res)
+        if json_match:
+            research_dossier = json.loads(json_match.group(0))
+            print("- Fact-Checker successfully sanitized the Master Dossier.")
+    except Exception as e:
+        print(f"- Fact-Checker JSON parse failed. Proceeding with unverified Dossier. Error: {e}")
+
+    # ---------------------------------------------------------
     # ITERATION 3: WRITER (Iterative Section by Section)
     # ---------------------------------------------------------
-    print("5. ITERATION 3: Calling Writer Agent (Iterative)...")
+    # ---------------------------------------------------------
+    # ITERATION 3: WRITER & REVIEWER (FEEDBACK LOOP)
+    # ---------------------------------------------------------
+    print("5. ITERATION 3: Calling Writer & Reviewer (Feedback Loop)...")
     
     def get_outline_for_category(cat: str, dos: dict, title: str) -> list:
         if cat == 'curiosidades':
@@ -165,42 +235,100 @@ async def generate_article(force_category: str = None):
         return img_map
         
     outline = get_outline_for_category(category, research_dossier, editor_briefing.get("cleanTitle"))
-    image_distribution = distribute_images(editor_briefing.get("selectedImages", []), outline)
+    
+    final_reliable_images = await get_reliable_images(editor_briefing.get("cleanTitle"), source_data.get("extraImages", []), tavily_images)
+    image_distribution = distribute_images(final_reliable_images, outline)
     
     spanish_markdown = ""
-    previous_summary = ""
+    reviewer_feedback = ""
     
-    for i, section_title in enumerate(outline):
-        print(f"- Writing section {i+1}/{len(outline)}: {section_title}")
-        section_images = image_distribution.get(i, [])
-        section_prompt = get_section_writer_prompt(category, section_title, research_dossier, section_images, previous_summary)
+    for attempt in range(3):
+        print(f"\n--- WRITER LOOP ATTEMPT {attempt + 1}/3 ---")
+        current_spanish_markdown = ""
+        previous_summary = ""
+        
+        for i, section_title in enumerate(outline):
+            print(f"- Writing section {i+1}/{len(outline)}: {section_title}")
+            section_images = image_distribution.get(i, [])
+            section_prompt = get_section_writer_prompt(category, section_title, research_dossier, section_images, previous_summary, reviewer_feedback)
+            
+            try:
+                section_text = await call_llm(section_prompt, "gemini:gemini-2.5-pro,groq:llama-3.3-70b-versatile,cerebras:gpt-oss-120b", 2000)
+                current_spanish_markdown += section_text + "\n\n"
+                previous_summary += f"- Sección '{section_title}' ya redactada.\n"
+            except Exception as e:
+                print(f"Failed to write section {section_title}: {e}")
+                
+        spanish_markdown = current_spanish_markdown
+        
+        print("- Calling Reviewer Agent...")
+        reviewer_prompt = get_reviewer_prompt(category, spanish_markdown, editor_briefing, research_dossier)
+        reviewer_res_raw = await call_llm(reviewer_prompt, "gemini:gemini-2.5-pro,groq:llama-3.3-70b-versatile,cerebras:gpt-oss-120b", 2000)
         
         try:
-            section_text = await call_llm(section_prompt, 2000)
-            spanish_markdown += section_text + "\n\n"
-            previous_summary += f"- Sección '{section_title}' ya redactada.\n"
+            json_match = re.search(r'\{[\s\S]*\}', reviewer_res_raw)
+            if json_match:
+                review_data = json.loads(json_match.group(0))
+                if review_data.get("status") == "APPROVED":
+                    print("--> APPROVED BY REVIEWER!")
+                    break
+                else:
+                    reviewer_feedback = review_data.get("feedback", "El artículo necesita ser reescrito, asegúrate de seguir las reglas.")
+                    print(f"--> NEEDS REVISION: {reviewer_feedback}")
+            else:
+                print("--> Reviewer failed to return JSON, forcing approval to avoid infinite loop.")
+                break
         except Exception as e:
-            print(f"Failed to write section {section_title}: {e}")
-            
-    print(f"- Writer generated {len(spanish_markdown)} characters of Spanish Markdown.")
+            print(f"--> Reviewer parse error: {e}. Forcing approval.")
+            break
 
     # ---------------------------------------------------------
     # ITERATION 4: TRANSLATOR (English Only)
     # ---------------------------------------------------------
     print("6. ITERATION 4: Calling Translator Agent (English Only)...")
     translator_prompt = get_translator_prompt(spanish_markdown)
-    english_markdown = await call_llm(translator_prompt, 8000)
-    print(f"- Translator generated {len(english_markdown)} characters of English Markdown.")
+    english_markdown = await call_llm(translator_prompt, "cerebras:gpt-oss-120b,groq:llama-3.3-70b-versatile,gemini:gemini-2.5-flash", 8000)
 
     # ---------------------------------------------------------
-    # ITERATION 5: REVIEWER
+    # ITERATION 5: IMAGE AGENT (Intelligent Review)
     # ---------------------------------------------------------
-    print("7. ITERATION 5: Calling Reviewer Agent...")
-    reviewer_prompt = get_reviewer_prompt(spanish_markdown, english_markdown, editor_briefing)
-    reviewer_response_raw = await call_llm(reviewer_prompt, 8000)
+    print("7. ITERATION 5: Calling Image QA Agent...")
+    image_urls_in_md = re.findall(r'!\[.*?\]\((.*?)\)', spanish_markdown)
+    
+    if image_urls_in_md:
+        image_agent_prompt = get_image_agent_prompt(editor_briefing.get("cleanTitle"), image_urls_in_md)
+        image_res_raw = await call_llm(image_agent_prompt, "gemini:gemini-2.5-pro,groq:llama-3.3-70b-versatile,cerebras:gpt-oss-120b", 2000)
+        try:
+            json_match = re.search(r'\{[\s\S]*\}', image_res_raw)
+            if json_match:
+                img_data = json.loads(json_match.group(0))
+                for item in img_data.get("url_analysis", []):
+                    url = item.get("url")
+                    if item.get("status") == "REPLACE" and url in spanish_markdown:
+                        print(f"- Image agent flagged URL for replacement: {url} (Reason: {item.get('reason')})")
+                        try:
+                            from ddgs import DDGS
+                            with DDGS() as ddgs:
+                                ddgs_res = ddgs.images(f"{editor_briefing.get('cleanTitle')} anime official scene", max_results=2)
+                                if ddgs_res:
+                                    new_url = ddgs_res[0].get("image")
+                                    spanish_markdown = spanish_markdown.replace(url, new_url)
+                                    english_markdown = english_markdown.replace(url, new_url)
+                                    print(f"  -> Replaced with: {new_url}")
+                        except Exception as ddgs_e:
+                            print(f"  -> DDGS search failed, leaving original. {ddgs_e}")
+        except Exception as e:
+            print(f"Image agent error: {e}")
+
+    # ---------------------------------------------------------
+    # ITERATION 6: TITULATOR
+    # ---------------------------------------------------------
+    print("8. ITERATION 6: Calling Titulator Agent...")
+    titulator_prompt = get_titulator_prompt(spanish_markdown, english_markdown, editor_briefing)
+    titulator_res_raw = await call_llm(titulator_prompt, "gemini:gemini-2.5-pro,groq:llama-3.3-70b-versatile,cerebras:gpt-oss-120b", 3000)
     
     try:
-        json_match = re.search(r'\{[\s\S]*\}', reviewer_response_raw)
+        json_match = re.search(r'\{[\s\S]*\}', titulator_res_raw)
         if not json_match:
             raise ValueError("No JSON found")
         json_str = json_match.group(0)
@@ -208,22 +336,25 @@ async def generate_article(force_category: str = None):
         json_str = json_str.replace("\\'", "'")
         parsed_response = json.loads(json_str)
     except Exception as e:
-        print("Reviewer JSON Parse failed, attempting strict sanitization...", e)
-        json_match2 = re.search(r'\{[\s\S]*\}', reviewer_response_raw)
-        clean_str = json_match2.group(0) if json_match2 else reviewer_response_raw
-        clean_str = re.sub(r'[\u0000-\u001F]+', " ", clean_str)
-        clean_str = clean_str.replace("\\'", "'")
-        try:
-            parsed_response = json.loads(clean_str)
-        except Exception as e2:
-            print("Final JSON Parse failed. Raw Output:", reviewer_response_raw)
-            raise Exception("Reviewer Pipeline Stage Failed - Bad JSON Format")
+        print("Titulator parse failed, using fallback.", e)
+        parsed_response = {
+            "title_es": f"Todo sobre {editor_briefing.get('cleanTitle')}",
+            "title_en": f"All about {editor_briefing.get('cleanTitle')}",
+            "excerpt_es": "Descubre los secretos de este anime.",
+            "excerpt_en": "Discover the secrets of this anime.",
+            "content_es": spanish_markdown,
+            "content_en": english_markdown,
+            "tags": []
+        }
 
-    print("8. Pipeline Completed Successfully. Formatting DB Object...")
+    print("9. Pipeline Completed Successfully. Formatting DB Object...")
 
     title_es = parsed_response.get("title_es", "Título por defecto")
     slug = slugify(title_es) + '-' + str(random.randint(100, 999))
     final_cover_image = source_data.get("imageUrl")
+    
+    if "unsplash.com" in final_cover_image and final_reliable_images:
+        final_cover_image = final_reliable_images[0]
 
     return {
         "title": {
@@ -232,8 +363,8 @@ async def generate_article(force_category: str = None):
         },
         "slug": slug,
         "content": {
-            "es": parsed_response.get("content_es", "").replace("\\n", "\n"),
-            "en": parsed_response.get("content_en", parsed_response.get("content_es", "")).replace("\\n", "\n"),
+            "es": parsed_response.get("content_es", spanish_markdown).replace("\\n", "\n"),
+            "en": parsed_response.get("content_en", english_markdown).replace("\\n", "\n"),
         },
         "excerpt": {
             "es": parsed_response.get("excerpt_es", "Sinopsis breve del artículo."),

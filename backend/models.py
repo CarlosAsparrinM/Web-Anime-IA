@@ -1,6 +1,10 @@
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from datetime import datetime
+
+class CommentModel(BaseModel):
+    text: str
+    date: datetime
 
 class LocalizedString(BaseModel):
     es: str
@@ -17,5 +21,6 @@ class ArticleModel(BaseModel):
     animeName: str
     tags: List[str]
     published: bool = True
+    comments: List[CommentModel] = []
     createdAt: datetime = None
     updatedAt: datetime = None
