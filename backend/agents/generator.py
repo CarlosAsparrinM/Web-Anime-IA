@@ -81,22 +81,28 @@ async def call_llm(prompt_json_string: str, model_str: str, max_tokens: int = 80
                 if not ai_result.get("choices") or len(ai_result["choices"]) == 0:
                     raise Exception("API-One returned empty choices array")
 
-                return ai_result["choices"][0]["message"]["content"]
+                message = ai_result["choices"][0]["message"]
+                
+                # Throttling para proteger las cuotas gratuitas (Rate Limits)
+                await asyncio.sleep(10)
+
+                if "content" not in message:
+                    if message.get("refusal"):
+                        raise Exception(f"LLM Refusal: {message.get('refusal')}")
+                    return ""
+                
+                return message["content"] or ""
         except Exception as e:
             if attempt == max_retries - 1:
                 print(f"Call to LLM failed after {max_retries} attempts. Last error: {e}")
                 raise e
             
-            backoff_time = 2 ** attempt
+            backoff_time = 10 * (2 ** attempt)
             print(f"LLM call failed (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {backoff_time}s...")
             await asyncio.sleep(backoff_time)
 
-async def generate_article(force_category: str = None):
-    print("1. Starting Multi-Agent Generation Pipeline (5 Phases)")
-    category = force_category or get_category_for_today()
+async def _run_pipeline(category: str):
     source_data = None
-
-    print(f"- Selected Category: {category}")
     print("2. Fetching Raw Data from APIs...")
     try:
         if category == 'novedades':
@@ -131,7 +137,7 @@ async def generate_article(force_category: str = None):
     # ---------------------------------------------------------
     print("3. ITERATION 1: Calling Editor Agent...")
     editor_prompt = get_editor_prompt(category, source_data)
-    editor_response_raw = await call_llm(editor_prompt, "groq:llama-3.1-8b-instant,gemini:gemini-2.5-flash,cerebras:gemma-4-31b", 1500)
+    editor_response_raw = await call_llm(editor_prompt, "cerebras:gemma-4-31b,gemini:gemini-2.5-flash,groq:llama-3.1-8b-instant", 1500)
     
     try:
         json_match = re.search(r'\{[\s\S]*\}', editor_response_raw)
@@ -142,7 +148,17 @@ async def generate_article(force_category: str = None):
         print("Editor failed to return valid JSON. Raw output:", editor_response_raw)
         raise Exception("Editor Pipeline Stage Failed")
 
-    print(f"- Editor Clean Title: {editor_briefing.get('cleanTitle')}")
+    clean_title = editor_briefing.get('cleanTitle')
+    print(f"- Editor Clean Title: {clean_title}")
+
+    from database import get_db
+    db = get_db()
+    existing_article = await db["articles"].find_one({
+        "animeName": clean_title,
+        "category": category
+    })
+    if existing_article:
+        raise ValueError(f"An article for '{clean_title}' in category '{category}' already exists in the database.")
 
     # ---------------------------------------------------------
     # ITERATION 2: RESEARCHER (MAP-REDUCE)
@@ -151,11 +167,11 @@ async def generate_article(force_category: str = None):
     
     print("4. ITERATION 2: Calling Researcher Agent (MAP-REDUCE)...")
     if category == 'novedades':
-        search_query = f"{editor_briefing.get('cleanTitle')} anime latest news update announcements site:animenewsnetwork.com OR site:crunchyroll.com/news OR site:reddit.com/r/anime OR site:myanimelist.net/news OR site:comicbook.com/anime OR site:sportskeeda.com/anime"
+        search_query = f'"{clean_title}" anime latest news update announcements site:animenewsnetwork.com OR site:crunchyroll.com/news OR site:reddit.com/r/anime OR site:myanimelist.net/news OR site:comicbook.com/anime OR site:sportskeeda.com/anime'
     elif category == 'curiosidades':
-        search_query = f"{editor_briefing.get('cleanTitle')} anime trivia easter eggs hidden facts site:animenewsnetwork.com OR site:myanimelist.net OR site:crunchyroll.com/news OR site:fandom.com"
+        search_query = f'"{clean_title}" anime trivia easter eggs hidden facts site:animenewsnetwork.com OR site:myanimelist.net OR site:crunchyroll.com/news OR site:fandom.com'
     else:
-        search_query = f"{editor_briefing.get('cleanTitle')} anime plot characters animation review site:animenewsnetwork.com OR site:myanimelist.net OR site:crunchyroll.com/news OR site:fandom.com"
+        search_query = f'"{clean_title}" anime plot characters animation review site:animenewsnetwork.com OR site:myanimelist.net OR site:crunchyroll.com/news OR site:fandom.com'
         
     tavily_results, tavily_images = await fetch_tavily_research(search_query, category)
     
@@ -165,7 +181,7 @@ async def generate_article(force_category: str = None):
             print(f"- Mapping source {i+1}/{len(tavily_results)}: {source.get('title')}")
             map_prompt = get_researcher_map_prompt(category, editor_briefing.get("cleanTitle"), source)
             try:
-                map_res = await call_llm(map_prompt, "groq:llama-3.3-70b-versatile,cerebras:gpt-oss-120b,gemini:gemini-2.5-pro", 1000)
+                map_res = await call_llm(map_prompt, "cerebras:gemma-4-31b,gemini:gemini-2.5-flash,groq:llama-3.1-8b-instant", 1000)
                 json_match = re.search(r'\{[\s\S]*\}', map_res)
                 if json_match:
                     all_facts.append(json.loads(json_match.group(0)))
@@ -174,7 +190,7 @@ async def generate_article(force_category: str = None):
     
     print("- Reducing facts into Master Dossier...")
     reduce_prompt = get_researcher_reduce_prompt(category, editor_briefing.get("cleanTitle"), all_facts)
-    reduce_res = await call_llm(reduce_prompt, "groq:llama-3.3-70b-versatile,cerebras:gpt-oss-120b,gemini:gemini-2.5-pro", 2000)
+    reduce_res = await call_llm(reduce_prompt, "gemini:gemini-2.5-flash,cerebras:gemma-4-31b,groq:llama-3.1-8b-instant", 2000)
     
     try:
         json_match = re.search(r'\{[\s\S]*\}', reduce_res)
@@ -190,13 +206,17 @@ async def generate_article(force_category: str = None):
     # ---------------------------------------------------------
     print("4.5. ITERATION 2.5: Calling Fact-Checker Agent...")
     fact_checker_prompt = get_fact_checker_prompt(category, editor_briefing.get("cleanTitle"), research_dossier, tavily_results)
-    fact_checker_res = await call_llm(fact_checker_prompt, "groq:llama-3.3-70b-versatile,cerebras:gpt-oss-120b,gemini:gemini-2.5-pro", 2000)
+    fact_checker_res = await call_llm(fact_checker_prompt, "gemini:gemini-2.5-flash,cerebras:gemma-4-31b,groq:llama-3.1-8b-instant", 2000)
     
     try:
         json_match = re.search(r'\{[\s\S]*\}', fact_checker_res)
         if json_match:
             research_dossier = json.loads(json_match.group(0))
+            if research_dossier.get("INSUFFICIENT_DATA") is True:
+                raise ValueError("Fact-Checker flagged this anime as having insufficient data.")
             print("- Fact-Checker successfully sanitized the Master Dossier.")
+    except ValueError as ve:
+        raise Exception(f"Pipeline aborted: {ve}")
     except Exception as e:
         print(f"- Fact-Checker JSON parse failed. Proceeding with unverified Dossier. Error: {e}")
 
@@ -253,7 +273,7 @@ async def generate_article(force_category: str = None):
             section_prompt = get_section_writer_prompt(category, section_title, research_dossier, section_images, previous_summary, reviewer_feedback)
             
             try:
-                section_text = await call_llm(section_prompt, "gemini:gemini-2.5-pro,groq:llama-3.3-70b-versatile,cerebras:gpt-oss-120b", 2000)
+                section_text = await call_llm(section_prompt, "groq:llama-3.3-70b-versatile,gemini:gemini-2.5-pro,cerebras:gpt-oss-120b", 2000)
                 current_spanish_markdown += section_text + "\n\n"
                 previous_summary += f"- Sección '{section_title}' ya redactada.\n"
             except Exception as e:
@@ -263,7 +283,7 @@ async def generate_article(force_category: str = None):
         
         print("- Calling Reviewer Agent...")
         reviewer_prompt = get_reviewer_prompt(category, spanish_markdown, editor_briefing, research_dossier)
-        reviewer_res_raw = await call_llm(reviewer_prompt, "gemini:gemini-2.5-pro,groq:llama-3.3-70b-versatile,cerebras:gpt-oss-120b", 2000)
+        reviewer_res_raw = await call_llm(reviewer_prompt, "groq:llama-3.3-70b-versatile,gemini:gemini-2.5-pro,cerebras:gpt-oss-120b", 2000)
         
         try:
             json_match = re.search(r'\{[\s\S]*\}', reviewer_res_raw)
@@ -287,7 +307,13 @@ async def generate_article(force_category: str = None):
     # ---------------------------------------------------------
     print("6. ITERATION 4: Calling Translator Agent (English Only)...")
     translator_prompt = get_translator_prompt(spanish_markdown)
-    english_markdown = await call_llm(translator_prompt, "cerebras:gpt-oss-120b,groq:llama-3.3-70b-versatile,gemini:gemini-2.5-flash", 8000)
+    try:
+        english_markdown = await call_llm(translator_prompt, "cerebras:gemma-4-31b,gemini:gemini-2.5-flash,groq:llama-3.1-8b-instant", 8000)
+        if not english_markdown:
+            raise ValueError("Empty translation received from LLM")
+    except Exception as e:
+        print(f"Translator failed: {e}")
+        raise Exception(f"Pipeline aborted: Translator phase failed. {e}")
 
     # ---------------------------------------------------------
     # ITERATION 5: IMAGE AGENT (Intelligent Review)
@@ -297,7 +323,7 @@ async def generate_article(force_category: str = None):
     
     if image_urls_in_md:
         image_agent_prompt = get_image_agent_prompt(editor_briefing.get("cleanTitle"), image_urls_in_md)
-        image_res_raw = await call_llm(image_agent_prompt, "gemini:gemini-2.5-pro,groq:llama-3.3-70b-versatile,cerebras:gpt-oss-120b", 2000)
+        image_res_raw = await call_llm(image_agent_prompt, "cerebras:gemma-4-31b,gemini:gemini-2.5-flash,groq:llama-3.1-8b-instant", 2000)
         try:
             json_match = re.search(r'\{[\s\S]*\}', image_res_raw)
             if json_match:
@@ -325,9 +351,9 @@ async def generate_article(force_category: str = None):
     # ---------------------------------------------------------
     print("8. ITERATION 6: Calling Titulator Agent...")
     titulator_prompt = get_titulator_prompt(spanish_markdown, english_markdown, editor_briefing)
-    titulator_res_raw = await call_llm(titulator_prompt, "gemini:gemini-2.5-pro,groq:llama-3.3-70b-versatile,cerebras:gpt-oss-120b", 3000)
     
     try:
+        titulator_res_raw = await call_llm(titulator_prompt, "cerebras:gemma-4-31b,gemini:gemini-2.5-flash,groq:llama-3.1-8b-instant", 3000)
         json_match = re.search(r'\{[\s\S]*\}', titulator_res_raw)
         if not json_match:
             raise ValueError("No JSON found")
@@ -336,16 +362,8 @@ async def generate_article(force_category: str = None):
         json_str = json_str.replace("\\'", "'")
         parsed_response = json.loads(json_str)
     except Exception as e:
-        print("Titulator parse failed, using fallback.", e)
-        parsed_response = {
-            "title_es": f"Todo sobre {editor_briefing.get('cleanTitle')}",
-            "title_en": f"All about {editor_briefing.get('cleanTitle')}",
-            "excerpt_es": "Descubre los secretos de este anime.",
-            "excerpt_en": "Discover the secrets of this anime.",
-            "content_es": spanish_markdown,
-            "content_en": english_markdown,
-            "tags": []
-        }
+        print("Titulator parse failed.", e)
+        raise Exception(f"Pipeline aborted: Titulator phase failed. {e}")
 
     print("9. Pipeline Completed Successfully. Formatting DB Object...")
 
@@ -363,8 +381,8 @@ async def generate_article(force_category: str = None):
         },
         "slug": slug,
         "content": {
-            "es": parsed_response.get("content_es", spanish_markdown).replace("\\n", "\n"),
-            "en": parsed_response.get("content_en", english_markdown).replace("\\n", "\n"),
+            "es": spanish_markdown,
+            "en": english_markdown,
         },
         "excerpt": {
             "es": parsed_response.get("excerpt_es", "Sinopsis breve del artículo."),
@@ -377,3 +395,21 @@ async def generate_article(force_category: str = None):
         "tags": parsed_response.get("tags", []),
         "published": True
     }
+
+
+async def generate_article(force_category: str = None):
+    print("1. Starting Multi-Agent Generation Pipeline (5 Phases)")
+    category = force_category or get_category_for_today()
+    print(f"- Selected Category: {category}")
+
+    for attempt in range(1, 4):
+        print(f"\n--- PIPELINE ATTEMPT {attempt}/3 ---")
+        try:
+            article_data = await _run_pipeline(category)
+            return article_data
+        except Exception as e:
+            if attempt == 3:
+                print(f"Pipeline failed catastrophically after 3 attempts. Last error: {e}")
+                raise e
+            print(f"Pipeline attempt {attempt} failed: {e}. Retrying with a different anime/news in 2s...")
+            await asyncio.sleep(2)

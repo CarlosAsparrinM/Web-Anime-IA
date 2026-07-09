@@ -109,11 +109,15 @@ def get_researcher_reduce_prompt(category: str, clean_title: str, all_mapped_fac
 }"""
         extra_instruction = "Construye un dossier enciclopédico sumamente rico y profundo."
 
+    confidence_rule = 'SOLAMENTE acepta hechos que vengan marcados con confidence: "HIGH". Descarta los MEDIUM o LOW.'
+    if category == 'novedades':
+        confidence_rule = 'Acepta hechos que vengan marcados con confidence: "HIGH" o "MEDIUM". Descarta los LOW.'
+
     system = f"""
 Eres el Investigador Principal (Fase REDUCE).
 Has recibido una lista de hechos extraídos de múltiples fuentes web sobre el anime.
 Tu trabajo es consolidarlos, eliminar duplicados y devolver un "Dossier Maestro" estructurado.
-CRÍTICO: SOLAMENTE acepta hechos que vengan marcados con confidence: "HIGH". Descarta los MEDIUM o LOW.
+CRÍTICO: {confidence_rule}
 {extra_instruction}
 
 CRÍTICO:
@@ -137,7 +141,8 @@ Eres el Agente de Fact-Checking (Fase 3.5).
 Tu trabajo es auditar y enriquecer el Dossier Maestro generado en la fase anterior.
 1. Revisa cada afirmación del Dossier.
 2. Si un dato parece incorrecto, corrígelo. Si el dossier está muy vacío, PUEDES usar tu propio conocimiento experto sobre el anime para añadir hechos básicos, importantes y verídicos.
-3. Devuelve ÚNICAMENTE el Dossier Maestro en formato JSON, ya limpio, enriquecido y verificado.
+3. CRÍTICO: Si determinas que no existen hechos reales, sustanciales y verificables sobre el anime en las fuentes proporcionadas, y tampoco tienes conocimiento experto verídico interno para rellenarlo, debes omitir todo el formato del dossier y devolver estrictamente este JSON: { "INSUFFICIENT_DATA": true }. No inventes ni alucines información falsa bajo ningún concepto.
+4. Devuelve ÚNICAMENTE el JSON final, ya sea el Dossier Maestro limpio y enriquecido o el objeto de datos insuficientes.
 """
     # Create a simplified version of raw sources to save tokens
     simplified_sources = [{"title": s.get("title"), "url": s.get("url")} for s in raw_sources] if isinstance(raw_sources, list) else raw_sources
@@ -157,14 +162,19 @@ Devuelve el Dossier en JSON estrictamente verificado y libre de alucinaciones:
 
 
 def get_section_writer_prompt(category: str, section_title: str, dossier: dict, images: list, previous_summary: str, reviewer_feedback: str = "") -> str:
+    if category == 'novedades':
+        source_instruction = "USO DE FUENTES: Usa el Dossier Maestro como tu ÚNICA fuente de información. Queda ESTRICTAMENTE PROHIBIDO inventar noticias, películas, tecnologías de producción, bandas sonoras, socios comerciales o fechas de estreno que no aparezcan en el Dossier. Si falta información, mantén el artículo corto y conciso. No inventes relleno."
+    else:
+        source_instruction = "USO DE FUENTES: Usa el Dossier Maestro como tu fuente principal de información. Si el dossier no contiene suficientes detalles, puedes usar tu propio conocimiento experto VERÍDICO sobre el anime para enriquecer el artículo. SIN EMBARGO, queda terminantemente prohibido inventar arcos argumentales, personajes, finales alternativos, estudios de animación, compositores, datos de taquilla, o noticias de secuelas. Todo dato aportado por ti debe ser un hecho históricamente verificable en el canon oficial del anime o en su producción real."
+
     system = f"""
 Eres un Redactor Experto de KenkoAnime, escribiendo un artículo paso a paso.
 Se te ha pedido escribir ÚNICAMENTE la sección actual: "{section_title}".
 
 CRÍTICO: 
 1. Devuelve ÚNICAMENTE el texto en Markdown de esta sección en ESPAÑOL. No incluyas el JSON ni bloques de código.
-2. USO DE FUENTES: Usa el Dossier Maestro como tu fuente principal de información. Si el dossier no contiene suficientes detalles, DEBES usar tu propio conocimiento experto sobre el anime para enriquecer el artículo de forma verídica y atractiva.
-3. PROHIBIDO QUEJARSE: BAJO NINGUNA CIRCUNSTANCIA debes escribir metatextos disculpándote, mencionando el "Dossier Maestro", la "falta de información", o tus "reglas anti-alucinación". Si falta información, simplemente redacta un texto interesante con lo que sepas del anime.
+2. {source_instruction}
+3. PROHIBIDO QUEJARSE: BAJO NINGUNA CIRCUNSTANCIA debes escribir metatextos disculpándote, mencionando el "Dossier Maestro", la "falta de información", o tus "reglas anti-alucinación". Si falta información, simplemente redacta un texto interesante con los datos verídicos que poseas.
 4. ESTILO Y CALIDAD: Escribe con un tono entretenido, informativo y fluido. No uses clichés robóticos, pero mantén un estándar periodístico alto.
 5. NO repitas información que ya se cubrió en las secciones anteriores (lee el resumen de lo ya escrito).
 """
@@ -244,10 +254,9 @@ Devuelve el veredicto en JSON crudo:
 def get_titulator_prompt(spanish_markdown: str, english_markdown: str, editor_briefing: dict) -> str:
     system = """
 Eres el Agente Titulador de KenkoAnime. 
-Tu trabajo es empaquetar un artículo bilingüe generado en el formato JSON estricto requerido por la base de datos.
+Tu trabajo es empaquetar la metadata de un artículo bilingüe generado en el formato JSON estricto requerido por la base de datos.
 CRÍTICO:
-1. DEBES escapar TODOS los saltos de línea dentro de las cadenas de texto Markdown usando \\n. NO uses saltos de línea literales (Enters).
-2. El JSON debe ser perfecto y crudo. NO añadas ningún saludo, explicación, ni bloques de código (```json). SOLO el objeto.
+1. El JSON debe ser perfecto y crudo. NO añadas ningún saludo, explicación, ni bloques de código (```json). SOLO el objeto.
 
 Formato requerido:
 {
@@ -255,8 +264,6 @@ Formato requerido:
   "title_en": "Catchy creative title in English",
   "excerpt_es": "Breve resumen de 2 líneas del artículo en español",
   "excerpt_en": "Short 2-line summary of the article in English",
-  "content_es": "Contenido Markdown en Español (escapado)\\n\\n...",
-  "content_en": "Contenido Markdown en Inglés (escapado)\\n\\n...",
   "imageAlt": "Descripción descriptiva de la imagen principal para accesibilidad",
   "tags": ["tag1", "tag2", "tag3"]
 }
