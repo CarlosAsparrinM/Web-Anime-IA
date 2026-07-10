@@ -14,14 +14,13 @@ async def fetch_tavily_research(query: str, category: str = "analisis") -> list:
         "include_answer": False,
         "include_raw_content": True, # Extrae todo el texto de la web, no solo un resumen
         "include_images": True,
-        "max_results": 7 # Límite ideal para el plan Free (5-10)
+        "max_results": 10 # Límite ideal para el plan Free (5-10)
     }
 
     # Time-awareness para noticias
     if category == "novedades":
         payload["topic"] = "news"
-        payload["days"] = 3 # Solo leer contenido de los últimos 3 días
-
+        payload["days"] = 15 # Leer contenido de los últimos 15 días
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(

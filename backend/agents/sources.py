@@ -150,7 +150,46 @@ async def fetch_anime_news() -> dict:
     if not items:
         raise Exception("No news found")
     
-    item = random.choice(items[:min(3, len(items))])
+    # Filtrar noticias: priorizar las que hablen de anime y descartar manga/live-action/juegos de nicho
+    reject_keywords = [
+        'manga gets', 'manga adds', 'manga launches', 'manga ends',
+        'live-action', 'live action', 'novel', 'light novel',
+        'game gets', 'game will', 'video game',
+        'idol', 'cosplay', 'figure', 'merchandise',
+        'dies at', 'passes away', 'obituary'
+    ]
+    
+    priority_keywords = [
+        'anime', 'season', 'trailer', 'teaser', 'premiere',
+        'stream', 'crunchyroll', 'funimation', 'netflix',
+        'studio', 'film', 'movie', 'sequel', 'announces'
+    ]
+    
+    def score_item(item):
+        title_lower = item.title.lower()
+        # Rechazar inmediatamente si tiene palabras clave de rechazo
+        for kw in reject_keywords:
+            if kw in title_lower:
+                return -1
+        # Puntuar positivamente si tiene palabras clave de prioridad
+        score = 0
+        for kw in priority_keywords:
+            if kw in title_lower:
+                score += 1
+        return score
+    
+    scored_items = [(score_item(item), item) for item in items[:15]]
+    # Filtrar los rechazados y ordenar por puntaje
+    valid_items = [(s, item) for s, item in scored_items if s >= 0]
+    valid_items.sort(key=lambda x: x[0], reverse=True)
+    
+    if not valid_items:
+        # Si no hay nada válido, tomar cualquiera de las primeras 5
+        item = random.choice(items[:min(5, len(items))])
+    else:
+        # Elegir al azar entre las top 3 mejor puntuadas
+        top_items = [item for _, item in valid_items[:min(3, len(valid_items))]]
+        item = random.choice(top_items)
     
     # Intentar extraer una imagen del feed o de la URL original
     extracted_image = None
