@@ -9,7 +9,7 @@ load_dotenv()
 async def run_test():
     try:
         print("Starting manual generation test...")
-        article = await generate_article("analisis")
+        article = await generate_article("resenas")
         
         print("\n\n=== FINAL DB OBJECT ===")
         print(json.dumps(article, indent=2, ensure_ascii=False))

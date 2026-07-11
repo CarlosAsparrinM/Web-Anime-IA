@@ -34,21 +34,7 @@ Genera el JSON del Briefing:
     return json.dumps([{"role": "system", "content": system}, {"role": "user", "content": user}])
 
 
-def get_researcher_map_prompt(category: str, clean_title: str, single_source: dict) -> str:
-    blacklist_instruction = ""
-    if category == 'novedades':
-        blacklist_instruction = """CRÍTICO - LISTA NEGRA: Descarta INMEDIATAMENTE cualquier dato que:
-- Provenga de Instagram, TikTok, Reddit, Twitter, YouTube.
-- Sea una opinión, especulación o teoría de fans.
-- Mencione seguidores, likes, views, posts, stories, hashtags.
-- Mencione rumores, leaks, merchandising, cosplay o fanarts.
-- Contenga frases como "podría", "se espera", "los fans creen"."""
-    else:
-        blacklist_instruction = """CRÍTICO - LISTA NEGRA: Descarta INMEDIATAMENTE cualquier dato que:
-- Provenga de Instagram, TikTok, Reddit, Twitter, YouTube.
-- Mencione seguidores, likes, views, posts, stories, hashtags.
-- Mencione cosplay, fanarts o merchandising de nicho sin valor informativo.
-NOTA: Para análisis y curiosidades, SÍ debes extraer análisis temáticos de la trama, conceptos filosóficos de la obra, recepción crítica, detalles de producción, impacto cultural e interpretaciones oficiales ampliamente aceptadas."""
+def get_researcher_map_prompt(category: str, clean_title: str, single_source: dict, blacklist_instruction: str) -> str:
 
     system = f"""
 Eres un Asistente de Investigación (Fase MAP).
@@ -82,44 +68,7 @@ Extrae los hechos relevantes para el anime y categoría en el JSON solicitado:
     return json.dumps([{"role": "system", "content": system}, {"role": "user", "content": user}])
 
 
-def get_researcher_reduce_prompt(category: str, clean_title: str, all_mapped_facts: list) -> str:
-    today_date = datetime.now().strftime("%Y-%m-%d")
-    
-    if category == 'novedades':
-        json_format = """{
-  "headline": "¿Qué ocurrió exactamente?",
-  "whoAnnounced": "¿Quién lo anunció oficialmente?",
-  "when": "Fecha del anuncio",
-  "where": "Fuente oficial",
-  "whyItMatters": "¿Por qué es importante?",
-  "whatChanges": "¿Qué cambia respecto a antes?",
-  "context": "Contexto del anime para nuevos lectores",
-  "verifiedFacts": ["Dato verificado 1", "Dato verificado 2"]
-}"""
-        extra_instruction = f"HOY ES {today_date}. Esta es una noticia de ÚLTIMA HORA. NO conviertas rumores en hechos ni expectativas en anuncios. NO uses 'los fans esperan...' sin declaración oficial."
-    elif category == 'curiosidades':
-        json_format = """{
-  "triviaList": [
-    {
-      "fact": "Curiosidad única y específica (ej. censura, referencias, cambios)",
-      "context": "Contexto detallado de la curiosidad",
-      "source": "Fuente original"
-    }
-  ]
-}"""
-        extra_instruction = "AGRUPA Y FILTRA: No repitas el mismo dato de producción varias veces. Busca curiosidades DIVERSAS: cambios entre manga y anime, inspiraciones del autor, censura, referencias, cameos, récords. Si solo hay 3 curiosidades DIVERSAS reales en las fuentes, devuelve solo 3, no inventes relleno para llegar a más."
-    else: # analisis
-        json_format = """{
-  "officialSynopsis": "Resumen fiel de la trama",
-  "production": { "studio": "", "director": "", "writer": "", "composer": "", "year": "" },
-  "themes": ["Tema 1", "Tema 2", "Tema 3"],
-  "characters": [{ "name": "", "role": "", "traits": "" }],
-  "worldBuilding": ["Detalle 1", "Detalle 2"],
-  "lore": ["Secreto 1", "Mito 2"],
-  "criticalReception": ["Recepción 1"],
-  "interestingFacts": ["Producción secreta"]
-}"""
-        extra_instruction = "Construye un dossier enciclopédico sumamente rico, denso y profundo. Agrupa todos los personajes con sus nombres y apellidos correctos, roles y habilidades que vengan en las fuentes. Conserva detalles de producción muy precisos (estudios reales, directores, compositores, canales de emisión). Si los hechos contienen múltiples nombres de personajes o detalles de la trama, regístralos detalladamente sin omitir nada. Evita resúmenes genéricos."
+def get_researcher_reduce_prompt(category: str, clean_title: str, all_mapped_facts: list, api_data: dict, json_format: str, extra_instruction: str) -> str:
 
     confidence_rule = 'Acepta hechos que vengan marcados con confidence: "HIGH" o "MEDIUM". Descarta los LOW (que son solo ruido de la web o comentarios irrelevantes).'
 
@@ -127,6 +76,15 @@ def get_researcher_reduce_prompt(category: str, clean_title: str, all_mapped_fac
 Eres el Investigador Principal (Fase REDUCE).
 Has recibido una lista de hechos extraídos de múltiples fuentes web sobre el anime.
 Tu trabajo es consolidarlos, eliminar duplicados y devolver un "Dossier Maestro" estructurado.
+
+DATOS INMUTABLES DE LA API (NO MODIFICAR):
+- Episodios: {api_data.get('episodes')}
+- Géneros: {', '.join(api_data.get('genres', []))}
+- Estudios: {', '.join(api_data.get('studios', []))}
+- Año: {api_data.get('year')}
+- Calificación: {api_data.get('score')}
+Estos datos provienen directamente de MyAnimeList/Jikan y son la VERDAD ABSOLUTA. Inclúyelos textualmente en el Dossier sin modificar.
+
 CRÍTICO: {confidence_rule}
 {extra_instruction}
 
@@ -152,7 +110,8 @@ Tu trabajo es auditar el Dossier Maestro generado en la fase anterior contra las
 1. Revisa cada afirmación del Dossier y compárala con las FUENTES CRUDAS proporcionadas.
 2. ELIMINA cualquier dato en el Dossier que no esté respaldado directamente por las FUENTES CRUDAS. QUEDA ESTRICTAMENTE PROHIBIDO usar tu propio conocimiento experto para rellenar vacíos. 
 3. CRÍTICO: Si determinas que no existen hechos reales, sustanciales y verificables sobre la franquicia/película en las fuentes proporcionadas, debes omitir todo el formato del dossier y devolver estrictamente este JSON: { "status": "INSUFFICIENT_DATA" }. No inventes ni alucines información falsa bajo ningún concepto.
-4. Devuelve ÚNICAMENTE el JSON final, ya sea el Dossier Maestro limpio (sin alucinaciones) o el objeto de datos insuficientes.
+4. VERIFICACIÓN DE PERFILES: Si el Dossier asigna roles, profesiones o descripciones específicas a personajes, verifica que esas descripciones estén respaldadas por al menos una fuente cruda. Si un personaje es descrito con un rol que no aparece en ninguna fuente, ELIMINA esa descripción del Dossier.
+5. Devuelve ÚNICAMENTE el JSON final, ya sea el Dossier Maestro limpio (sin alucinaciones) o el objeto de datos insuficientes.
 """
     # Create a simplified version of raw sources to save tokens
     simplified_sources = [{"title": s.get("title"), "url": s.get("url")} for s in raw_sources] if isinstance(raw_sources, list) else raw_sources
@@ -171,23 +130,10 @@ Devuelve el Dossier en JSON estrictamente verificado y libre de alucinaciones:
     return json.dumps([{"role": "system", "content": system}, {"role": "user", "content": user}])
 
 
-def get_section_writer_prompt(category: str, section_title: str, dossier: dict, images: list, previous_summary: str, reviewer_feedback: str = "") -> str:
-    word_count_guideline = ""
-    if category == 'novedades':
-        word_count_guideline = "La sección debe tener aproximadamente entre 150 y 250 palabras (el artículo final será de 700-1000 palabras)."
-    elif category == 'curiosidades':
-        word_count_guideline = "La sección debe tener aproximadamente entre 250 y 350 palabras (el artículo final será de 1300-1500 palabras)."
-    else: # analisis
-        word_count_guideline = "La sección debe tener aproximadamente entre 350 y 450 palabras (el artículo final será de 1700-2000 palabras)."
-
-    if category == 'novedades':
-        source_instruction = "USO DE FUENTES: Usa el Dossier Maestro como tu ÚNICA fuente de información. QUEDA ESTRICTAMENTE PROHIBIDO inventar o deducir información, personajes, tramas, estudios, o fechas que no estén explícitamente en el Dossier. No uses tu 'conocimiento experto'. Si el Dossier tiene pocos datos, escribe una sección más corta, priorizando la veracidad absoluta sobre la longitud."
-        deduction_instruction = "PROHIBIDO INTERPRETAR O DEDUCIR: Si el Dossier dice \"se anunció una película\", NO deduzcas que \"la serie dejará de existir\" o que \"reemplaza a la temporada 3\". Reporta SOLO lo que el Dossier dice literalmente. NUNCA presentes conclusiones lógicas como hechos confirmados. Si quieres mencionar una posibilidad, usa SIEMPRE frases como \"podría\", \"aún no se confirma\", \"queda por ver\"."
-        write_instruction = f'Escribe el Markdown ÚNICAMENTE para la sección "{section_title}" usando EXCLUSIVAMENTE los datos del Dossier Maestro:'
-    else:
-        source_instruction = "USO DE FUENTES: Usa el Dossier Maestro como tu fuente principal de información. Si el dossier no tiene suficientes detalles o no explica bien el contexto de una curiosidad/dato, PUEDES usar tu propio conocimiento experto VERÍDICO sobre el anime para enriquecer el artículo. CRÍTICO: Tu conocimiento propio debe ser sobre datos verificables, ampliamente documentados y reales. Prohibido inventar."
-        deduction_instruction = "PROHIBIDO ESPECULAR Y MODO CONSERVADOR: Si decides usar tu propio conocimiento experto para añadir detalles (personajes, habilidades, estudios, emisoras), debes estar 100% SEGURO de su veracidad y ortografía oficial. Si no recuerdas con precisión absoluta el apellido de un personaje, su clase de juego exacta, su habilidad oficial o el canal de emisión, usa descripciones genéricas (ej. \"el protagonista\", \"la elfa\", \"la guerrera\", \"canales de televisión\") en lugar de escribir nombres específicos que puedan estar equivocados. Queda terminantemente prohibido inventar o asumir detalles técnicos de producción como flujos híbridos, CGI o tasas de frames si no tienes evidencia histórica directa."
-        write_instruction = f'Escribe el Markdown ÚNICAMENTE para la sección "{section_title}" usando los datos del Dossier Maestro y tu conocimiento experto verídico (bajo reglas estrictas de no adivinar):'
+def get_section_writer_prompt(category: str, section_title: str, dossier: dict, images: list, previous_summary: str, word_count_guideline: str, source_instruction: str, deduction_instruction: str, reviewer_feedback: str = "", target_words: int = 0) -> str:
+    if target_words > 0:
+        word_count_guideline = f"META DE PALABRAS: Escribe esta sección utilizando aproximadamente {target_words} palabras. Ajusta tu nivel de detalle para cumplir esta meta sin usar frases de relleno ni dar rodeos vacíos."
+    write_instruction = f'Escribe el Markdown ÚNICAMENTE para la sección "{section_title}" usando EXCLUSIVAMENTE los datos del Dossier Maestro:' if category == 'novedades' else f'Escribe el Markdown ÚNICAMENTE para la sección "{section_title}" usando los datos del Dossier Maestro y tu conocimiento experto verídico (bajo reglas estrictas de no adivinar):'
 
     system = f"""
 Eres un Redactor Periodístico Experto de KenkoAnime, escribiendo un artículo paso a paso.
@@ -202,7 +148,8 @@ CRÍTICO:
 6. PROHIBIDO QUEJARSE: BAJO NINGUNA CIRCUNSTANCIA debes escribir metatextos disculpándote, mencionando el "Dossier Maestro", la "falta de información", o tus "reglas anti-alucinación". 
 7. PROHIBIDO CREAR SUBTÍTULOS INTERNOS: No utilices encabezados de Markdown (ej. H2: ##, H3: ###, H4: ####) dentro del cuerpo de tu texto. Desarrolla la sección de forma fluida usando únicamente párrafos de prosa limpia. La estructura del artículo ya la define el sistema.
 8. ESTILO Y CALIDAD: Escribe con un tono entretenido, informativo y periodístico.
-9. NO repitas información, datos, años o hechos que ya se cubrieron en las secciones anteriores (lee el texto real ya escrito abajo).
+9. PROHIBIDO REPETIR CONCEPTOS: No repitas ideas que ya fueron cubiertas en secciones anteriores. Si la introducción ya mencionó que los personajes están interconectados, no lo repitas en la sección de personajes. Cada sección debe aportar información NUEVA (lee el texto real ya escrito abajo).
+10. PROHIBIDO JERGA DE IA: No uses terminología técnica que suene artificial como 'bucle recursivo', 'planificación digital integrada', 'motor narrativo'. Escribe con un lenguaje periodístico natural y accesible.
 """
     
     images_instruction = "No hay imágenes para insertar en esta sección."
@@ -257,11 +204,13 @@ La categoría objetivo de este artículo es: {category.upper()}
 
 CRÍTICO:
 1. ANTI-ALUCINACIÓN Y CONTROL DE NOMBRES (FACT-CHECKING DE CONOCIMIENTO GLOBAL): Si el artículo menciona nombres específicos de personajes (ej. apellidos), lore de fantasía (ej. clases de juego, tipos de magia) o detalles técnicos de animación (ej. CGI, paralaje) que NO están respaldados en el DOSSIER MAESTRO, DEBES ser sumamente crítico. Si no tienes certeza absoluta y contrastada de que esos detalles añadidos por el escritor sean 100% verídicos en el canon oficial de la obra, DEBES rechazar el artículo (NEEDS_REVISION) e indicarle al escritor que use términos genéricos (ej. "el protagonista", "la guerrera elfa") o que elimine la afirmación técnica inventada. Es mejor un texto genérico y correcto que uno específico y falso.
-2. DETECCIÓN DE INTERPRETACIONES: Si el artículo presenta conclusiones o deducciones como hechos confirmados (ej. "la serie dejará de continuar en formato de serie", "esta será la continuación canónica definitiva") pero el Dossier NO dice eso explícitamente, DEBES rechazarlo (NEEDS_REVISION). El artículo debe reportar hechos, no interpretar.
-3. DETECCIÓN DE RELLENO VACÍO: Si el artículo usa frases genéricas de relleno que no aportan información (ej. "representa un punto de inflexión", "abre nuevas puertas", "el futuro nunca fue tan prometedor", "promete ser una experiencia inmersiva"), DEBES rechazarlo (NEEDS_REVISION) pidiendo que se sustituyan por datos concretos o se eliminen.
-4. AUDITORÍA Y COHERENCIA: Revisa que el artículo tenga coherencia absoluta con la categoría ({category.upper()}) y su formato. Todo lo que se hable debe estar estrictamente relacionado con el objetivo del artículo.
-5. DETECCIÓN DE EXCUSAS: Si el artículo contiene menciones meta textuales (ej. "No hay suficiente información", "Según mis reglas", etc.), DEBES rechazarlo (NEEDS_REVISION).
-6. Devuelve ESTRICTAMENTE un objeto JSON con este formato crudo:
+2. VERIFICACIÓN DE PERSONAJES: Si el artículo asigna un ROL ESPECÍFICO a un personaje (ej. 'estudiante', 'influencer', 'capoeirista'), VERIFICA que ese rol aparezca literalmente en el Dossier Maestro. Si el Dossier dice algo distinto o no menciona ese rol, RECHAZA el artículo (NEEDS_REVISION) indicando exactamente qué personaje tiene un rol incorrecto.
+3. DETECCIÓN DE OPINIONES COMO HECHOS Y EXAGERACIONES: Si el artículo presenta comparaciones estilísticas (ej. 'como el cine de Tarantino') o juicios de valor como si fueran datos objetivos, o eleva un elemento parcial a 'eje absoluto' o 'centro de toda la historia' sin respaldo, RECHAZA el artículo (NEEDS_REVISION).
+4. DETECCIÓN DE RELLENO VACÍO Y REDUNDANCIA: Si el artículo usa frases genéricas de relleno, o si repite la misma idea o concepto en múltiples secciones (ej. 'los personajes están interconectados' aparece 3 veces), RECHAZA el artículo (NEEDS_REVISION) indicando las repeticiones.
+5. VERIFICACIÓN DE DATOS DUROS: Compara el número de episodios, géneros y estudios mencionados en el artículo contra los del Dossier. Si hay discrepancias (ej. '12-13 episodios' cuando el Dossier dice '13'), RECHAZA el artículo (NEEDS_REVISION).
+6. AUDITORÍA Y COHERENCIA: Revisa que el artículo tenga coherencia absoluta con la categoría ({category.upper()}) y su formato. Todo lo que se hable debe estar estrictamente relacionado con el objetivo del artículo.
+7. DETECCIÓN DE EXCUSAS: Si el artículo contiene menciones meta textuales (ej. "No hay suficiente información", "Según mis reglas", etc.), DEBES rechazarlo (NEEDS_REVISION).
+8. Devuelve ESTRICTAMENTE un objeto JSON con este formato crudo:
 {{
   "status": "APPROVED" | "NEEDS_REVISION",
   "feedback": "Si es APPROVED, déjalo vacío. Si es NEEDS_REVISION, escribe instrucciones claras al redactor sobre qué arreglar.",
@@ -364,5 +313,33 @@ CRÍTICO:
 {feedback}
 
 Por favor, reescribe y corrige el BORRADOR ACTUAL aplicando el FEEDBACK. Devuelve SOLO el Markdown final corregido:
+"""
+    return json.dumps([{"role": "system", "content": system}, {"role": "user", "content": user}])
+
+def get_architect_prompt(category: str, clean_title: str, dossier: dict, outline: list, total_target_words: int) -> str:
+    system = f"""
+Eres el Agente Arquitecto de KenkoAnime. Tu trabajo es leer el Dossier Maestro y planificar la distribución de palabras para cada sección del artículo.
+Se te ha dado un límite total de {total_target_words} palabras.
+Debes analizar la densidad, complejidad y cantidad de información disponible en el Dossier para cada tema, y asignar una meta de palabras (`word_target`) a cada sección del esqueleto proporcionado.
+Las secciones con mucha información deben recibir más palabras, y las que tienen poca información (o son introducciones/conclusiones) deben recibir menos palabras.
+La suma de todos los `word_target` debe ser aproximadamente {total_target_words}.
+
+Devuelve ESTRICTAMENTE un arreglo JSON con el siguiente formato, respetando los títulos de sección originales:
+[
+  {{ "title": "Introducción", "word_target": 150 }},
+  {{ "title": "Curiosidad #1: X", "word_target": 350 }}
+]
+"""
+    user = f"""
+ANIME: {clean_title}
+META TOTAL DE PALABRAS: {total_target_words}
+
+--- ESQUELETO DEL ARTÍCULO (Asigna palabras a cada uno de estos títulos exactos) ---
+{json.dumps(outline, ensure_ascii=False)}
+
+--- DOSSIER MAESTRO ---
+{json.dumps(dossier, ensure_ascii=False)}
+
+Genera la estructura JSON con las metas de palabras asignadas:
 """
     return json.dumps([{"role": "system", "content": system}, {"role": "user", "content": user}])

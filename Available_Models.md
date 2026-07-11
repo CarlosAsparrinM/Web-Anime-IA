@@ -1,6 +1,7 @@
 # Modelos Disponibles por Proveedor
 
 A continuación se muestra el listado completo y exacto de todos los modelos a los que tienes acceso con tus claves API actuales (`.env`).
+*Última actualización y auditoría: 10 de julio de 2026*
 
 ## 1. Cerebras
 El catálogo público de inferencia inmediata de Cerebras incluye:
@@ -23,6 +24,7 @@ Groq destaca por sus LPUs (Language Processing Units) que ofrecen velocidad extr
 * `meta-llama/llama-prompt-guard-2-22m`
 * `meta-llama/llama-prompt-guard-2-86m`
 * `openai/gpt-oss-120b`
+* `openai/gpt-oss-20b` *(Nuevo)*
 * `openai/gpt-oss-safeguard-20b`
 * `qwen/qwen3-32b`
 * `qwen/qwen3.6-27b`
@@ -32,14 +34,26 @@ Groq destaca por sus LPUs (Language Processing Units) que ofrecen velocidad extr
 ## 3. Google Gemini
 A través de tu acceso a Gemini, cuentas con el catálogo más diverso, que incluye modelos fundacionales, especializados y multimodales.
 
-**Familia Gemini (Texto y Multimodal):**
-* `gemini-1.0-pro` (y sus variantes `001`, `latest`, `vision-latest`)
-* `gemini-1.5-flash` (y variantes `001`, `002`, `latest`, `8b-001`, `8b-latest`)
-* `gemini-1.5-pro` (y variantes `001`, `002`, `latest`)
-* `gemini-2.0-flash-exp`
-* `gemini-2.0-flash-thinking-exp` (y variante `1219`)
+**Familia Gemini 3.x (La más reciente):**
+* `gemini-3.5-flash`
+* `gemini-3.1-pro-preview`
+* `gemini-3.1-pro-preview-customtools`
+* `gemini-3.1-flash-lite`
+* `gemini-3.1-flash-lite-preview`
+* `gemini-3-pro-preview`
+* `gemini-3-flash-preview`
+
+**Familia Gemini 2.x:**
 * `gemini-2.5-flash`
+* `gemini-2.5-flash-lite`
 * `gemini-2.5-pro`
+* `gemini-2.0-flash`
+* `gemini-2.0-flash-001`
+* `gemini-2.0-flash-lite`
+* `gemini-2.0-flash-lite-001`
+* `gemini-flash-latest`
+* `gemini-flash-lite-latest`
+* `gemini-pro-latest`
 * `gemini-omni-flash-preview`
 
 **Modelos Especializados (Agentes e Investigación):**
@@ -52,6 +66,12 @@ A través de tu acceso a Gemini, cuentas con el catálogo más diverso, que incl
 * `gemini-robotics-er-1.6-preview`
 
 **Generación Multimedia (Imágenes y Video):**
+* `gemini-3.1-flash-image`
+* `gemini-3.1-flash-image-preview`
+* `gemini-3.1-flash-lite-image`
+* `gemini-3-pro-image`
+* `gemini-3-pro-image-preview`
+* `gemini-2.5-flash-image`
 * `imagen-4.0-generate-001`
 * `imagen-4.0-ultra-generate-001`
 * `imagen-4.0-fast-generate-001`
@@ -59,9 +79,15 @@ A través de tu acceso a Gemini, cuentas con el catálogo más diverso, que incl
 * `veo-3.1-fast-generate-preview`
 * `veo-3.1-lite-generate-preview`
 
-**Audio y Voz:**
-* `gemini-2.5-flash-native-audio-latest`
+**Audio, Voz y Traducción en Vivo:**
+* `gemini-3.5-live-translate-preview`
+* `gemini-3.1-flash-live-preview`
 * `gemini-3.1-flash-tts-preview`
+* `gemini-2.5-flash-preview-tts`
+* `gemini-2.5-pro-preview-tts`
+* `gemini-2.5-flash-native-audio-latest`
+* `gemini-2.5-flash-native-audio-preview-09-2025`
+* `gemini-2.5-flash-native-audio-preview-12-2025`
 * `lyria-3-clip-preview`
 * `lyria-3-pro-preview`
 
@@ -71,7 +97,7 @@ A través de tu acceso a Gemini, cuentas con el catálogo más diverso, que incl
 * `gemini-embedding-2-preview`
 * `aqa` (Attributed Question Answering)
 
-**Modelos Clásicos (Bison):**
-* `chat-bison-001`
-* `text-bison-001`
-* `embedding-gecko-001`
+**Modelos Abiertos / Experimentales de Google:**
+* `gemma-4-26b-a4b-it`
+* `gemma-4-31b-it`
+* `nano-banana-pro-preview`

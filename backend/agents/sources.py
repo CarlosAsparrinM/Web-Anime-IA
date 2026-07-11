@@ -52,7 +52,6 @@ async def fetch_anilist_fallback(sort_method="POPULARITY_DESC", max_page=100) ->
             "FINISHED": "Finished Airing", "RELEASING": "Currently Airing",
             "NOT_YET_RELEASED": "Not yet aired", "CANCELLED": "Cancelled", "HIATUS": "Hiatus"
         }
-        
         return {
             "mal_id": anime.get("id"),
             "title": title,
@@ -65,6 +64,76 @@ async def fetch_anilist_fallback(sort_method="POPULARITY_DESC", max_page=100) ->
             "episodes": anime.get("episodes", "Unknown"),
             "status": status_map.get(anime.get("status"), "Unknown"),
             "extraImages": []
+        }
+
+async def fetch_classic_anime() -> dict:
+    from datetime import datetime, timedelta
+    date_10_years_ago = int((datetime.now() - timedelta(days=365*10)).strftime("%Y%m%d"))
+    print(f"--> Fetching Classic Anime (Finished, Started before {date_10_years_ago}) from AniList...")
+    query = '''
+    query ($page: Int, $startDate: FuzzyDateInt) {
+      Page(page: $page, perPage: 1) {
+        media(type: ANIME, sort: POPULARITY_DESC, status: FINISHED, startDate_lesser: $startDate) {
+          id title { english romaji } description(asHtml: false) coverImage { extraLarge }
+          genres averageScore seasonYear studios(isMain: true) { nodes { name } } episodes status
+        }
+      }
+    }
+    '''
+    page = random.randint(1, 150)
+    variables = {"page": page, "startDate": date_10_years_ago}
+    
+    async with httpx.AsyncClient() as client:
+        res = await client.post("https://graphql.anilist.co", json={"query": query, "variables": variables}, timeout=10.0)
+        data = res.json()
+        if "errors" in data or not data.get("data", {}).get("Page", {}).get("media"):
+            raise Exception(f"AniList API error in classic_anime: {data}")
+        anime = data["data"]["Page"]["media"][0]
+        title = anime.get("title", {}).get("english") or anime.get("title", {}).get("romaji") or "Unknown Title"
+        desc = anime.get("description") or "No synopsis available."
+        clean_desc = re.sub(r'<[^>]+>', '', desc)
+        studios = [node["name"] for node in anime.get("studios", {}).get("nodes", [])] if anime.get("studios") else ["Unknown"]
+        return {
+            "mal_id": anime.get("id"), "title": title, "synopsis": clean_desc,
+            "imageUrl": anime.get("coverImage", {}).get("extraLarge", ""),
+            "genres": anime.get("genres", []), "score": (anime.get("averageScore") / 10) if anime.get("averageScore") else None,
+            "year": anime.get("seasonYear"), "studios": studios, "episodes": anime.get("episodes", "Unknown"),
+            "status": "Finished Airing", "extraImages": []
+        }
+
+async def fetch_anime_for_review() -> dict:
+    from datetime import datetime, timedelta
+    date_1_week_ago = int((datetime.now() - timedelta(days=7)).strftime("%Y%m%d"))
+    print(f"--> Fetching Anime for Review (Finished before {date_1_week_ago}) from AniList...")
+    query = '''
+    query ($page: Int, $endDate: FuzzyDateInt) {
+      Page(page: $page, perPage: 1) {
+        media(type: ANIME, sort: POPULARITY_DESC, status: FINISHED, endDate_lesser: $endDate) {
+          id title { english romaji } description(asHtml: false) coverImage { extraLarge }
+          genres averageScore seasonYear studios(isMain: true) { nodes { name } } episodes status format
+        }
+      }
+    }
+    '''
+    page = random.randint(1, 150)
+    variables = {"page": page, "endDate": date_1_week_ago}
+    
+    async with httpx.AsyncClient() as client:
+        res = await client.post("https://graphql.anilist.co", json={"query": query, "variables": variables}, timeout=10.0)
+        data = res.json()
+        if "errors" in data or not data.get("data", {}).get("Page", {}).get("media"):
+            raise Exception(f"AniList API error in anime_for_review: {data}")
+        anime = data["data"]["Page"]["media"][0]
+        title = anime.get("title", {}).get("english") or anime.get("title", {}).get("romaji") or "Unknown Title"
+        desc = anime.get("description") or "No synopsis available."
+        clean_desc = re.sub(r'<[^>]+>', '', desc)
+        studios = [node["name"] for node in anime.get("studios", {}).get("nodes", [])] if anime.get("studios") else ["Unknown"]
+        return {
+            "mal_id": anime.get("id"), "title": title, "synopsis": clean_desc,
+            "imageUrl": anime.get("coverImage", {}).get("extraLarge", ""),
+            "genres": anime.get("genres", []), "score": (anime.get("averageScore") / 10) if anime.get("averageScore") else None,
+            "year": anime.get("seasonYear"), "studios": studios, "episodes": anime.get("episodes", "Unknown"),
+            "status": "Finished Airing", "extraImages": []
         }
 
 async def get_extra_images(mal_id: int) -> list:

@@ -4,141 +4,22 @@ import httpx
 import re
 import random
 from slugify import slugify
-from agents.sources import fetch_random_anime, fetch_seasonal_anime, fetch_top_anime, fetch_anime_news
 from agents.prompts import get_editor_prompt, get_translator_prompt, get_reviewer_prompt
 from agents.categories import get_category_for_today
 from agents.tavily import fetch_tavily_research
-
+from agents.strategies import get_strategy
+from agents.llm import call_llm, get_reliable_images
 import asyncio
 
-async def get_reliable_images(title: str, source_images: list, tavily_images: list) -> list:
-    valid_images = [img for img in source_images if img]
-    if len(valid_images) >= 5:
-        return valid_images[:5]
-        
-    if tavily_images:
-        for img in tavily_images:
-            if img and img.endswith(('.jpg', '.png', '.jpeg', '.webp', '.gif')) and img not in valid_images:
-                valid_images.append(img)
-        if len(valid_images) >= 5:
-            return valid_images[:5]
-
-    print("Nivel 3: Buscando imágenes en DuckDuckGo...")
-    try:
-        def search_images():
-            from ddgs import DDGS
-            with DDGS() as ddgs:
-                return ddgs.images(f"{title} anime official art wallpaper", max_results=5)
-                
-        results = await asyncio.to_thread(search_images)
-        if results:
-            for r in results:
-                img = r.get("image")
-                if img and img not in valid_images:
-                    valid_images.append(img)
-    except Exception as e:
-        print(f"Fallo en DuckDuckGo: {e}")
-
-    if not valid_images:
-        valid_images = [
-            "https://images.unsplash.com/photo-1578632767115-351597cf2477?q=80&w=800&auto=format&fit=crop",
-            "https://images.unsplash.com/photo-1607604276583-eef5d076aa5f?q=80&w=800&auto=format&fit=crop",
-            "https://images.unsplash.com/photo-1580477655122-540c493a3885?q=80&w=800&auto=format&fit=crop"
-        ]
-
-    return valid_images[:5]
-
-async def call_llm(prompt_json_string: str, model_str: str, max_tokens: int = 8000, max_retries: int = 3) -> str:
-    api_url = os.getenv("API_ONE_URL", "http://localhost:3000")
-    api_key = os.getenv("API_ONE_KEY")
-
-    if not api_key:
-        raise ValueError("Missing API_ONE_KEY in environment variables")
-
-    messages = json.loads(prompt_json_string)
-
-    for attempt in range(max_retries):
-        try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
-                response = await client.post(
-                    f"{api_url}/v1/chat/completions",
-                    headers={
-                        "Content-Type": "application/json",
-                        "Authorization": f"Bearer {api_key}"
-                    },
-                    json={
-                        "model": model_str,
-                        "messages": messages,
-                        "temperature": 0.7,
-                        "max_tokens": max_tokens
-                    }
-                )
-
-                if response.status_code != 200:
-                    raise Exception(f"API-One failed with status {response.status_code}: {response.text}")
-
-                ai_result = response.json()
-                if not ai_result.get("choices") or len(ai_result["choices"]) == 0:
-                    raise Exception("API-One returned empty choices array")
-
-                message = ai_result["choices"][0]["message"]
-                
-                # Throttling para proteger cuotas gratuitas (Rate Limits)
-                await asyncio.sleep(7)
-
-                if "content" not in message:
-                    if message.get("refusal"):
-                        raise Exception(f"LLM Refusal: {message.get('refusal')}")
-                    return ""
-                
-                return message["content"] or ""
-        except Exception as e:
-            if attempt == max_retries - 1:
-                print(f"Call to LLM failed after {max_retries} attempts. Last error: {e}")
-                raise e
-            
-            backoff_time = 10 * (2 ** attempt)
-            print(f"LLM call failed (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {backoff_time}s...")
-            await asyncio.sleep(backoff_time)
-
 async def _run_pipeline(category: str):
+    strategy = get_strategy(category)
     source_data = None
     print("2. Fetching Raw Data from APIs...")
     try:
-        if category == 'novedades':
-            source_data = await fetch_anime_news()
-        elif category == 'curiosidades':
-            # Reintentar hasta encontrar un anime finalizado, con mínimo 3 episodios y del año 2025 o anterior
-            for attempt in range(5):
-                source_data = await fetch_random_anime()
-                episodes = source_data.get("episodes")
-                episodes_val = int(episodes) if (isinstance(episodes, (int, float)) or (isinstance(episodes, str) and episodes.isdigit())) else 0
-                year = source_data.get("year")
-                year_val = int(year) if (isinstance(year, (int, float)) or (isinstance(year, str) and year.isdigit())) else 0
-                
-                if (source_data.get("status") == "Finished Airing" and 
-                    episodes_val >= 3 and 
-                    year_val > 0 and year_val < 2026):
-                    print(f"--> Selected valid anime for curiosidades: {source_data.get('title')} ({source_data.get('year')}, {source_data.get('episodes')} eps)")
-                    break
-                print(f"--> Anime '{source_data.get('title')}' skipped: status={source_data.get('status')}, eps={episodes_val}, year={year_val}. Retrying...")
-        else: # analisis
-            # Reintentar para encontrar un anime finalizado, con mínimo 3 episodios y del año 2025 o anterior
-            for attempt in range(5):
-                source_data = await fetch_top_anime()
-                episodes = source_data.get("episodes")
-                episodes_val = int(episodes) if (isinstance(episodes, (int, float)) or (isinstance(episodes, str) and episodes.isdigit())) else 0
-                year = source_data.get("year")
-                year_val = int(year) if (isinstance(year, (int, float)) or (isinstance(year, str) and year.isdigit())) else 0
-                
-                if (source_data.get("status") == "Finished Airing" and 
-                    episodes_val >= 3 and 
-                    year_val > 0 and year_val < 2026):
-                    print(f"--> Selected valid anime for analisis: {source_data.get('title')} ({source_data.get('year')}, {source_data.get('episodes')} eps)")
-                    break
-                print(f"--> Anime '{source_data.get('title')}' skipped: status={source_data.get('status')}, eps={episodes_val}, year={year_val}. Retrying...")
+        source_data = await strategy.fetch_data()
     except Exception as e:
         print(f"Failed to fetch source data, falling back to random anime. {e}")
+        from agents.sources import fetch_random_anime
         try:
             for attempt in range(3):
                 source_data = await fetch_random_anime()
@@ -184,7 +65,7 @@ async def _run_pipeline(category: str):
     editor_briefing = {}
     for attempt in range(3):
         try:
-            editor_response_raw = await call_llm(editor_prompt, "cerebras:gemma-4-31b,gemini:gemini-2.5-flash,groq:llama-3.1-8b-instant", 1500)
+            editor_response_raw = await call_llm(editor_prompt, "gemini:gemini-2.5-flash,cerebras:gemma-4-31b,groq:llama-3.1-8b-instant", 1500)
             json_match = re.search(r'\{[\s\S]*\}', editor_response_raw)
             if not json_match:
                 raise ValueError("No JSON found")
@@ -205,8 +86,6 @@ async def _run_pipeline(category: str):
     clean_title = editor_briefing.get('cleanTitle')
     print(f"- Editor Clean Title: {clean_title}")
 
-    from database import get_db
-    db = get_db()
     existing_article = await db["articles"].find_one({
         "animeName": clean_title,
         "category": category
@@ -220,14 +99,7 @@ async def _run_pipeline(category: str):
     from agents.prompts import get_researcher_map_prompt, get_researcher_reduce_prompt, get_fact_checker_prompt, get_section_writer_prompt, get_titulator_prompt, get_image_agent_prompt
     
     print("4. ITERATION 2: Calling Researcher Agent (MAP-REDUCE)...")
-    if category == 'novedades':
-        # Para novedades, usamos el título original de la noticia en vez del limpio
-        raw_news_title = source_data.get('title', clean_title)
-        search_query = f'"{raw_news_title}" anime latest news update official'
-    elif category == 'curiosidades':
-        search_query = f'{clean_title} anime trivia easter eggs hidden facts'
-    else:
-        search_query = f'{clean_title} anime plot characters animation review'
+    search_query = strategy.get_tavily_query(clean_title, source_data)
         
     tavily_results, tavily_images = await fetch_tavily_research(search_query, category)
     
@@ -235,9 +107,9 @@ async def _run_pipeline(category: str):
     if tavily_results and isinstance(tavily_results, list):
         for i, source in enumerate(tavily_results):
             print(f"- Mapping source {i+1}/{len(tavily_results)}: {source.get('title')}")
-            map_prompt = get_researcher_map_prompt(category, editor_briefing.get("cleanTitle"), source)
+            map_prompt = get_researcher_map_prompt(category, editor_briefing.get("cleanTitle"), source, strategy.MAP_BLACKLIST_INSTRUCTION)
             try:
-                map_res = await call_llm(map_prompt, "cerebras:gemma-4-31b,gemini:gemini-2.5-flash,groq:llama-3.1-8b-instant", 1000)
+                map_res = await call_llm(map_prompt, "gemini:gemini-2.5-flash,cerebras:gemma-4-31b,groq:llama-3.1-8b-instant", 1000)
                 json_match = re.search(r'\{[\s\S]*\}', map_res)
                 if json_match:
                     all_facts.append(json.loads(json_match.group(0)))
@@ -256,12 +128,12 @@ async def _run_pipeline(category: str):
         raise ValueError("Fact-Checker flagged this anime as having insufficient data.")
     
     print("- Reducing facts into Master Dossier...")
-    reduce_prompt = get_researcher_reduce_prompt(category, editor_briefing.get("cleanTitle"), all_facts)
+    reduce_prompt = get_researcher_reduce_prompt(category, editor_briefing.get("cleanTitle"), all_facts, source_data, strategy.REDUCE_JSON_FORMAT, strategy.REDUCE_EXTRA_INSTRUCTION)
     
     research_dossier = {}
     for attempt in range(3):
         try:
-            reduce_res = await call_llm(reduce_prompt, "gemini:gemini-2.5-flash,cerebras:gemma-4-31b,groq:llama-3.1-8b-instant", 2000)
+            reduce_res = await call_llm(reduce_prompt, "cerebras:gpt-oss-120b,groq:openai/gpt-oss-120b,gemini:gemini-2.5-flash", 2000)
             json_match = re.search(r'\{[\s\S]*\}', reduce_res)
             if not json_match:
                 raise ValueError("No JSON found")
@@ -286,7 +158,7 @@ async def _run_pipeline(category: str):
     
     for attempt in range(3):
         try:
-            fact_checker_res = await call_llm(fact_checker_prompt, "gemini:gemini-2.5-flash,cerebras:gemma-4-31b,groq:llama-3.1-8b-instant", 2000)
+            fact_checker_res = await call_llm(fact_checker_prompt, "cerebras:gpt-oss-120b,groq:openai/gpt-oss-120b,gemini:gemini-2.5-flash", 2000)
             json_match = re.search(r'\{[\s\S]*\}', fact_checker_res)
             if json_match:
                 json_str = json_match.group(0)
@@ -304,26 +176,55 @@ async def _run_pipeline(category: str):
     print("- Fact-Checker successfully sanitized the Master Dossier.")
 
     # ---------------------------------------------------------
-    # ITERATION 3: WRITER (Iterative Section by Section)
+    # ITERATION 2.7: DOSSIER QUALITY GATE
     # ---------------------------------------------------------
+    print("4.7. ITERATION 2.7: Dossier Quality Gate...")
+    
+    if not strategy.check_dossier_quality(research_dossier):
+        raise ValueError(f"Dossier Quality Gate failed for '{clean_title}' in category '{category}'. Dossier is too thin to write a quality article.")
+
+    # ---------------------------------------------------------
+    # ITERATION 2.8: ARCHITECT AGENT (Dynamic Word Distribution)
+    # ---------------------------------------------------------
+    from agents.prompts import get_architect_prompt
+    
+    print("4.8. ITERATION 2.8: Calling Architect Agent...")
+    
+    outline = strategy.get_outline(research_dossier, editor_briefing.get("cleanTitle"))
+    target_words = getattr(strategy, "TARGET_WORD_COUNT", 1000)
+    
+    architect_prompt = get_architect_prompt(category, editor_briefing.get("cleanTitle"), research_dossier, outline, target_words)
+    
+    architect_plan = []
+    for attempt in range(3):
+        try:
+            architect_res = await call_llm(architect_prompt, "gemini:gemini-2.5-flash,cerebras:gemma-4-31b,groq:llama-3.1-8b-instant", 1000)
+            json_match = re.search(r'\[[\s\S]*\]', architect_res)
+            if json_match:
+                architect_plan = json.loads(json_match.group(0))
+                if isinstance(architect_plan, list) and len(architect_plan) == len(outline):
+                    print("--> Architect successfully generated word distribution.")
+                    break
+            print(f"Architect returned invalid JSON format (attempt {attempt+1}/3). Retrying...")
+            await asyncio.sleep(2)
+        except Exception as e:
+            print(f"Architect failed (attempt {attempt+1}/3): {e}")
+            await asyncio.sleep(2)
+            
+    # Fallback to math division if Architect fails
+    if not architect_plan or len(architect_plan) != len(outline):
+        print("--> Architect failed after 3 attempts. Using fallback mathematical distribution.")
+        per_section = target_words // len(outline)
+        architect_plan = [{"title": title, "word_target": per_section} for title in outline]
+        
+    # Create a mapping for quick lookup in the writer phase
+    word_targets_map = {item.get("title", ""): item.get("word_target", target_words // len(outline)) for item in architect_plan}
+
     # ---------------------------------------------------------
     # ITERATION 3: WRITER & REVIEWER (FEEDBACK LOOP)
     # ---------------------------------------------------------
     print("5. ITERATION 3: Calling Writer & Reviewer (Feedback Loop)...")
     
-    def get_outline_for_category(cat: str, dos: dict, title: str) -> list:
-        if cat == 'curiosidades':
-            trivia_list = dos.get("triviaList", [])
-            num_items = len(trivia_list) if trivia_list else 5
-            out = [f"Introducción: {num_items} Cosas que no sabías de {title}"]
-            for j in range(1, num_items + 1):
-                out.append(f"Curiosidad #{j}")
-            return out
-        elif cat == 'novedades':
-            return ["Titular y Resumen de la Noticia", "El Anuncio a Fondo", "Contexto del Anime"]
-        else:
-            return [f"Introducción y Premisa de {title}", "¿De qué trata?", "Personajes Clave", "Animación y Técnica", "Veredicto Final"]
-
     def distribute_images(sel_imgs: list, out: list) -> dict:
         img_map = {}
         idx = 0
@@ -337,8 +238,6 @@ async def _run_pipeline(category: str):
                 idx += 1
         return img_map
         
-    outline = get_outline_for_category(category, research_dossier, editor_briefing.get("cleanTitle"))
-    
     final_reliable_images = await get_reliable_images(editor_briefing.get("cleanTitle"), source_data.get("extraImages", []), tavily_images)
     image_distribution = distribute_images(final_reliable_images, outline)
     
@@ -349,12 +248,24 @@ async def _run_pipeline(category: str):
     section_texts = [""] * len(outline)
     previous_summary = ""
     for i, section_title in enumerate(outline):
-        print(f"- Writing section {i+1}/{len(outline)}: {section_title}")
+        current_target = word_targets_map.get(section_title, target_words // len(outline))
+        print(f"- Writing section {i+1}/{len(outline)}: {section_title} (Target: ~{current_target} words)")
         section_images = image_distribution.get(i, [])
-        section_prompt = get_section_writer_prompt(category, section_title, research_dossier, section_images, previous_summary, "")
+        section_prompt = get_section_writer_prompt(
+            category, 
+            section_title, 
+            research_dossier, 
+            section_images, 
+            previous_summary,
+            strategy.WRITER_WORD_COUNT_GUIDELINE,
+            strategy.WRITER_SOURCE_INSTRUCTION,
+            strategy.WRITER_DEDUCTION_INSTRUCTION,
+            "",
+            current_target
+        )
         
         try:
-            section_text = await call_llm(section_prompt, "groq:llama-3.3-70b-versatile,gemini:gemini-2.5-pro,cerebras:gpt-oss-120b", 2000)
+            section_text = await call_llm(section_prompt, "cerebras:gpt-oss-120b,groq:llama-3.3-70b-versatile,gemini:gemini-2.5-flash", 2000)
             section_texts[i] = section_text
             previous_summary += f"### {section_title}\n{section_text}\n\n"
         except Exception as e:
@@ -369,7 +280,7 @@ async def _run_pipeline(category: str):
         
         # Pasamos el outline al Revisor
         reviewer_prompt = get_reviewer_prompt(category, spanish_markdown, editor_briefing, research_dossier, outline)
-        reviewer_res_raw = await call_llm(reviewer_prompt, "groq:llama-3.3-70b-versatile,gemini:gemini-2.5-pro,cerebras:gpt-oss-120b", 2000)
+        reviewer_res_raw = await call_llm(reviewer_prompt, "cerebras:gpt-oss-120b,groq:llama-3.3-70b-versatile,gemini:gemini-2.5-flash", 2000)
         
         needs_revision = False
         sections_to_fix = []
@@ -406,10 +317,22 @@ async def _run_pipeline(category: str):
                         temp_summary += f"### {outline[j]}\n{section_texts[j]}\n\n"
                         
                     section_images = image_distribution.get(idx, [])
-                    section_prompt = get_section_writer_prompt(category, section_title, research_dossier, section_images, temp_summary, reviewer_feedback)
+                    current_target = word_targets_map.get(section_title, target_words // len(outline))
+                    section_prompt = get_section_writer_prompt(
+                        category, 
+                        section_title, 
+                        research_dossier, 
+                        section_images, 
+                        temp_summary, 
+                        strategy.WRITER_WORD_COUNT_GUIDELINE,
+                        strategy.WRITER_SOURCE_INSTRUCTION,
+                        strategy.WRITER_DEDUCTION_INSTRUCTION,
+                        reviewer_feedback,
+                        current_target
+                    )
                     
                     try:
-                        new_text = await call_llm(section_prompt, "groq:llama-3.3-70b-versatile,gemini:gemini-2.5-pro,cerebras:gpt-oss-120b", 2000)
+                        new_text = await call_llm(section_prompt, "cerebras:gpt-oss-120b,groq:llama-3.3-70b-versatile,gemini:gemini-2.5-flash", 2000)
                         if new_text:
                             section_texts[idx] = new_text
                     except Exception as e:
@@ -426,7 +349,7 @@ async def _run_pipeline(category: str):
     english_markdown = ""
     for attempt in range(3):
         try:
-            english_markdown = await call_llm(translator_prompt, "cerebras:gemma-4-31b,gemini:gemini-2.5-flash,groq:llama-3.1-8b-instant", 8000)
+            english_markdown = await call_llm(translator_prompt, "groq:llama-3.3-70b-versatile,cerebras:gemma-4-31b,gemini:gemini-2.5-flash", 8000)
             if not english_markdown:
                 raise ValueError("Empty translation received from LLM")
             break
@@ -482,7 +405,7 @@ async def _run_pipeline(category: str):
     parsed_response = {}
     for attempt in range(3):
         try:
-            titulator_res_raw = await call_llm(titulator_prompt, "cerebras:gemma-4-31b,gemini:gemini-2.5-flash,groq:llama-3.1-8b-instant", 3000)
+            titulator_res_raw = await call_llm(titulator_prompt, "gemini:gemini-2.5-flash,cerebras:gemma-4-31b,groq:llama-3.1-8b-instant", 3000)
             json_match = re.search(r'\{[\s\S]*\}', titulator_res_raw)
             if not json_match:
                 raise ValueError("No JSON found")
